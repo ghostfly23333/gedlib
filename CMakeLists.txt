@@ -19,10 +19,12 @@
 #                                                                          #
 ############################################################################
 
-cmake_minimum_required(VERSION 2.6)
+cmake_minimum_required(VERSION 3.20)
 
-project(GEDLIB)
+project(GEDLIB LANGUAGES CXX CUDA)
 set(VERSION 1.0)
+
+option(CUDA_LSAPE "Use cuda lsape kernel to replace hungarian-lsape.h" OFF)
 
 # Determine build type.
 
@@ -87,6 +89,15 @@ if(GUROBI_ROOT)
   include_directories(SYSTEM ${GUROBI_HOME}/include)
   link_directories(${GUROBI_HOME}/lib)
  endif()
+
+# For CUDA kernel targets
+if(CUDA_LSAPE)
+  add_compile_definitions(CUDA_LSAPE=1)
+  add_library(cuda_lsape src/util/hungarian_lsape.cu)
+  set_target_properties(cuda_lsape PROPERTIES CUDA_ARCHITECTURES "50;72;86")
+else()
+  add_compile_definitions(CUDA_LSAPE=0)
+endif()
 
 # Add subdirectories.
 

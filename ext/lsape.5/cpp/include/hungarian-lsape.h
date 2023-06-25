@@ -64,7 +64,7 @@ namespace liblsap {
   // -----------------------------------------------------------
   template<class DT, typename IT>
     void basicPreprocLSAPE(const DT *C, const IT &nrows, const IT &ncols,
-			   IT *rho, IT *varrho, DT *u, DT *v, IT &nass, IT &mass)
+                           IT *rho, IT *varrho, DT *u, DT *v, IT &nass, IT &mass)
   {
     const IT n = nrows-1, m = ncols-1;
     IT i = 0, j;
@@ -75,39 +75,39 @@ namespace liblsap {
     // find the min of each row
     for (; i < n; i++)
       {
-	mn = std::numeric_limits<DT>::max();
-	for (j = 0; j < ncols; j++)
-	  {
-	    const DT &c = C[j*nrows+i];
-	    if (c < mn) mn = c;
-	  }
-	rho[i] = ncols;
-	u[i] = mn;
+        mn = std::numeric_limits<DT>::max();
+        for (j = 0; j < ncols; j++)
+          {
+            const DT &c = C[j*nrows+i];
+            if (c < mn) mn = c;
+          }
+        rho[i] = ncols;
+        u[i] = mn;
       }
   
     // find de min of each column
     for (j = 0; j < m; j++)
       {
-	mn = std::numeric_limits<DT>::max();
-	for (i = 0; i < nrows; i++)
-	  {
-	    val = C[j*nrows+i] - u[i];
-	    if (val < mn) mn = val;
-	  }
-	v[j] = mn;
-	varrho[j] = nrows;
+        mn = std::numeric_limits<DT>::max();
+        for (i = 0; i < nrows; i++)
+          {
+            val = C[j*nrows+i] - u[i];
+            if (val < mn) mn = val;
+          }
+        v[j] = mn;
+        varrho[j] = nrows;
       }
   
     // assign
     for (i = 0; i < n; i++)
       {
-	for (j = 0; j < m; j++)
-	  {
-	    if (rho[i] == ncols && varrho[j] == nrows && C[j*nrows+i] == u[i] + v[j])
-	      { rho[i] = j; varrho[j] = i; nass++; mass++; break; }
-	  }
-	// last column
-	if (rho[i] == ncols && C[m*nrows+i] == u[i]) { rho[i] = m; nass++; }
+        for (j = 0; j < m; j++)
+          {
+            if (rho[i] == ncols && varrho[j] == nrows && C[j*nrows+i] == u[i] + v[j])
+              { rho[i] = j; varrho[j] = i; nass++; mass++; break; }
+          }
+        // last column
+        if (rho[i] == ncols && C[m*nrows+i] == u[i]) { rho[i] = m; nass++; }
       }
   
     // last row
@@ -122,7 +122,7 @@ namespace liblsap {
   // -----------------------------------------------------------
   template<class DT, typename IT>
     void basicPreprocRowsLSAPE(const DT *C, const IT &nrows, const IT &ncols,
-			       IT *rho, IT *varrho, DT *u, DT *v, IT &nass, IT &mass)
+                               IT *rho, IT *varrho, DT *u, DT *v, IT &nass, IT &mass)
   {
     const IT n = nrows-1, m = ncols-1;
     IT i = 0, j;
@@ -133,14 +133,14 @@ namespace liblsap {
     // find the min of each row
     for (; i < n; i++)
       {
-	mn = std::numeric_limits<DT>::max();
-	for (j = 0; j < ncols; j++)
-	  {
-	    const DT &c = C[j*nrows+i];
-	    if (c < mn) mn = c;
-	  }
-	rho[i] = ncols;
-	u[i] = mn;
+        mn = std::numeric_limits<DT>::max();
+        for (j = 0; j < ncols; j++)
+          {
+            const DT &c = C[j*nrows+i];
+            if (c < mn) mn = c;
+          }
+        rho[i] = ncols;
+        u[i] = mn;
       }
   
     // find de min of each column
@@ -149,13 +149,13 @@ namespace liblsap {
     // assign
     for (i = 0; i < n; i++)
       {
-	for (j = 0; j < m; j++)
-	  {
-	    if (rho[i] == ncols && varrho[j] == nrows && C[j*nrows+i] == u[i] + v[j])
-	      { rho[i] = j; varrho[j] = i; nass++; mass++; break; }
-	  }
-	// last column
-	if (rho[i] == ncols && C[m*nrows+i] == u[i]) { rho[i] = m; nass++; }
+        for (j = 0; j < m; j++)
+          {
+            if (rho[i] == ncols && varrho[j] == nrows && C[j*nrows+i] == u[i] + v[j])
+              { rho[i] = j; varrho[j] = i; nass++; mass++; break; }
+          }
+        // last column
+        if (rho[i] == ncols && C[m*nrows+i] == u[i]) { rho[i] = m; nass++; }
       }
   
     // last row
@@ -166,7 +166,7 @@ namespace liblsap {
   // -----------------------------------------------------------
   template<class DT, typename IT>
     void basicPreprocColsLSAPE(const DT *C, const IT &nrows, const IT &ncols,
-			       IT *rho, IT *varrho, DT *u, DT *v, IT &nass, IT &mass)
+                               IT *rho, IT *varrho, DT *u, DT *v, IT &nass, IT &mass)
   {
     const IT n = nrows-1, m = ncols-1;
     IT i = 0, j = 0;
@@ -177,39 +177,39 @@ namespace liblsap {
     // find the min of each col
     for (; j < m; j++)
       {
-	mn = std::numeric_limits<DT>::max();
-	for (i = 0; i < nrows; i++)
-	  {
-	    const DT &c = C[j*nrows+i];
-	    if (c < mn) mn = c;
-	  }
-	varrho[j] = nrows;
-	v[j] = mn;
+        mn = std::numeric_limits<DT>::max();
+        for (i = 0; i < nrows; i++)
+          {
+            const DT &c = C[j*nrows+i];
+            if (c < mn) mn = c;
+          }
+        varrho[j] = nrows;
+        v[j] = mn;
       }
   
     // find de min of each row
     for (i = 0; i < n; i++)
       {
-	mn = std::numeric_limits<DT>::max();
-	for (j = 0; j < ncols; j++)
-	  {
-	    val = C[j*nrows+i] - v[j];
-	    if (val < mn) mn = val;
-	  }
-	u[i] = mn;
-	rho[i] = ncols;
+        mn = std::numeric_limits<DT>::max();
+        for (j = 0; j < ncols; j++)
+          {
+            val = C[j*nrows+i] - v[j];
+            if (val < mn) mn = val;
+          }
+        u[i] = mn;
+        rho[i] = ncols;
       }
   
     // assign
     for (j = 0; j < m; j++)
       {
-	for (i = 0; i < n; i++)
-	  {
-	    if (rho[i] == ncols && varrho[j] == nrows && C[j*nrows+i] == u[i] + v[j])
-	      { rho[i] = j; varrho[j] = i; nass++; mass++; break; }
-	  }
-	// last row n
-	if (varrho[j] == nrows && C[j*nrows+n] == v[j]) { varrho[j] = n; mass++; }
+        for (i = 0; i < n; i++)
+          {
+            if (rho[i] == ncols && varrho[j] == nrows && C[j*nrows+i] == u[i] + v[j])
+              { rho[i] = j; varrho[j] = i; nass++; mass++; break; }
+          }
+        // last row n
+        if (varrho[j] == nrows && C[j*nrows+n] == v[j]) { varrho[j] = n; mass++; }
       }
   
     // last column
@@ -222,7 +222,7 @@ namespace liblsap {
   // -----------------------------------------------------------
   template<class DT, typename IT>
     void basicPreprocLSAPE_forb(const DT *C, const IT &nrows, const IT &ncols,
-				IT *rho, IT *varrho, DT *u, DT *v, IT &nass, IT &mass)
+                                IT *rho, IT *varrho, DT *u, DT *v, IT &nass, IT &mass)
   {
     const IT n = nrows-1, m = ncols-1;
     IT i = 0, j;
@@ -233,44 +233,44 @@ namespace liblsap {
     // find the min of each row
     for (; i < n; i++)
       {
-	mn = std::numeric_limits<DT>::max();
-	for (j = 0; j < ncols; j++)
-	  {
-	    const DT &c = C[j*nrows+i];
-	    if (c < 0) continue;
-	    if (c < mn) mn = c;
-	  }
-	rho[i] = ncols;
-	u[i] = mn;
+        mn = std::numeric_limits<DT>::max();
+        for (j = 0; j < ncols; j++)
+          {
+            const DT &c = C[j*nrows+i];
+            if (c < 0) continue;
+            if (c < mn) mn = c;
+          }
+        rho[i] = ncols;
+        u[i] = mn;
       }
   
     // find de min of each column
     for (j = 0; j < m; j++)
       {
-	mn = std::numeric_limits<DT>::max();
-	for (i = 0; i < nrows; i++)
-	  {
-	    const DT &c = C[j*nrows+i];
-	    if (c < 0) continue;
-	    val = c - u[i];
-	    if (val < mn) mn = val;
-	  }
-	v[j] = mn;
-	varrho[j] = nrows;
+        mn = std::numeric_limits<DT>::max();
+        for (i = 0; i < nrows; i++)
+          {
+            const DT &c = C[j*nrows+i];
+            if (c < 0) continue;
+            val = c - u[i];
+            if (val < mn) mn = val;
+          }
+        v[j] = mn;
+        varrho[j] = nrows;
       }
   
     // assign
     for (i = 0; i < n; i++)
       {
-	for (j = 0; j < m; j++)
-	  {
-	    const DT &c = C[j*nrows+i];
-	    if (c < 0) continue;
-	    if (rho[i] == ncols && varrho[j] == nrows && c == u[i] + v[j])
-	      { rho[i] = j; varrho[j] = i; nass++; mass++; break; }
-	  }
-	// last column
-	if (rho[i] == ncols && C[m*nrows+i] == u[i]) { rho[i] = m; nass++; }
+        for (j = 0; j < m; j++)
+          {
+            const DT &c = C[j*nrows+i];
+            if (c < 0) continue;
+            if (rho[i] == ncols && varrho[j] == nrows && c == u[i] + v[j])
+              { rho[i] = j; varrho[j] = i; nass++; mass++; break; }
+          }
+        // last column
+        if (rho[i] == ncols && C[m*nrows+i] == u[i]) { rho[i] = m; nass++; }
       }
   
     // last row
@@ -284,7 +284,7 @@ namespace liblsap {
   // -----------------------------------------------------------
   template<class DT, typename IT>
     void augmentingPathColLSAPE(const IT &k, const DT *C, const IT &nrows, const IT &m, const IT *rho, const IT *varrho, 
-				IT *U, IT *SV, IT *pred, DT *u, DT *v, DT *pi, IT &zi, IT &zj)
+                                IT *U, IT *SV, IT *pred, DT *u, DT *v, DT *pi, IT &zi, IT &zj)
   {
     const IT n = nrows-1, ncols = m + 1;
     IT i = 0, j = k, r = 0, *SVptr = SV, *ulutop = U, *uluptr = NULL;
@@ -298,51 +298,51 @@ namespace liblsap {
   
     while (true)
       {
-	*SVptr = j; *(++SVptr) = ncols;
-	// last row: null element epsilon, it is a sink of an alternating path
-	if ((varrho[j] < n || varrho[j] == nrows) && C[j*nrows+n] == v[j]) { zi = n; zj = j; return; }
+        *SVptr = j; *(++SVptr) = ncols;
+        // last row: null element epsilon, it is a sink of an alternating path
+        if ((varrho[j] < n || varrho[j] == nrows) && C[j*nrows+n] == v[j]) { zi = n; zj = j; return; }
     
-	for (uluptr = ulutop;  uluptr != uend; ++uluptr) // U\LU
-	  {
-	    r = *uluptr;
-	    cred = C[j*nrows+r] - (u[r] + v[j]);
-	    if (cred < pi[r])
-	      {
-		pred[r] = j;
-		pi[r] = cred;
-		if (cred == zero)
-		  {
-		    if (rho[r] == ncols || rho[r] == m) { zi = r; zj = ncols; return; }
-		    i = *ulutop; *ulutop = r; *uluptr = i; ++ulutop;
-		  }
-	      }
-	  }
+        for (uluptr = ulutop;  uluptr != uend; ++uluptr) // U\LU
+          {
+            r = *uluptr;
+            cred = C[j*nrows+r] - (u[r] + v[j]);
+            if (cred < pi[r])
+              {
+                pred[r] = j;
+                pi[r] = cred;
+                if (cred == zero)
+                  {
+                    if (rho[r] == ncols || rho[r] == m) { zi = r; zj = ncols; return; }
+                    i = *ulutop; *ulutop = r; *uluptr = i; ++ulutop;
+                  }
+              }
+          }
     
-	if (lusutop == ulutop) // dual update
-	  {
-	    delta = std::numeric_limits<DT>::max(); lstrw = false;
-	    for (uluptr = ulutop;  uluptr != uend; ++uluptr) // U\LU
-	      if (pi[*uluptr] < delta) delta = pi[*uluptr];
-	    for (svptr = SV; *svptr != ncols; ++svptr) // last row
-	      {
-		cred = C[*svptr*nrows+n] - v[*svptr];
-		if (cred <= delta) { delta = cred; lstrw = true; zj = *svptr; }
-	      }
-	    for (svptr = SV; *svptr != ncols; ++svptr) v[*svptr] += delta;
-	    for (luptr = U; luptr != ulutop; ++luptr) u[*luptr] -= delta;
-	    if (lstrw) { zi = n; return; }
-	    for (uluptr = ulutop;  uluptr != uend; ++uluptr) // U\LU
-	      {
-		pi[*uluptr] -= delta;
-		if (pi[*uluptr] == 0) 
-		  {
-		    if (rho[*uluptr] == ncols || rho[*uluptr] == m) { zi = *uluptr; zj = ncols; return; }
-		    r = *ulutop; *ulutop = *uluptr; *uluptr = r; ++ulutop;
-		  }
-	      }
-	  } // end dual update
-	i = *lusutop; ++lusutop; // i is now in SU
-	j = rho[i];
+        if (lusutop == ulutop) // dual update
+          {
+            delta = std::numeric_limits<DT>::max(); lstrw = false;
+            for (uluptr = ulutop;  uluptr != uend; ++uluptr) // U\LU
+              if (pi[*uluptr] < delta) delta = pi[*uluptr];
+            for (svptr = SV; *svptr != ncols; ++svptr) // last row
+              {
+                cred = C[*svptr*nrows+n] - v[*svptr];
+                if (cred <= delta) { delta = cred; lstrw = true; zj = *svptr; }
+              }
+            for (svptr = SV; *svptr != ncols; ++svptr) v[*svptr] += delta;
+            for (luptr = U; luptr != ulutop; ++luptr) u[*luptr] -= delta;
+            if (lstrw) { zi = n; return; }
+            for (uluptr = ulutop;  uluptr != uend; ++uluptr) // U\LU
+              {
+                pi[*uluptr] -= delta;
+                if (pi[*uluptr] == 0) 
+                  {
+                    if (rho[*uluptr] == ncols || rho[*uluptr] == m) { zi = *uluptr; zj = ncols; return; }
+                    r = *ulutop; *ulutop = *uluptr; *uluptr = r; ++ulutop;
+                  }
+              }
+          } // end dual update
+        i = *lusutop; ++lusutop; // i is now in SU
+        j = rho[i];
       }
   }
 
@@ -352,7 +352,7 @@ namespace liblsap {
   // -----------------------------------------------------------
   template<class DT, typename IT>
     void augmentingPathRowLSAPE(const IT &k, const DT *C, const IT &nrows, const IT &m, const IT *rho, const IT *varrho, 
-				IT *V, IT *SU, IT *pred, DT *u, DT *v, DT *pi, IT &zi, IT &zj)
+                                IT *V, IT *SU, IT *pred, DT *u, DT *v, DT *pi, IT &zi, IT &zj)
   {
     const IT n = nrows-1, ncols = m+1;
     IT *suptr = NULL, *lvptr = NULL, *vend = V+m, *lvsvtop = V;
@@ -366,53 +366,53 @@ namespace liblsap {
   
     while (true)
       {
-	*SUptr = i; *(++SUptr) = nrows;
+        *SUptr = i; *(++SUptr) = nrows;
     
-	// last column: null element epsilon, it is a sink of an alternating path
-	if ((rho[i] < m || rho[i] == ncols) && C[m*nrows+i] == u[i]) { zi = i; zj = m; return; }
+        // last column: null element epsilon, it is a sink of an alternating path
+        if ((rho[i] < m || rho[i] == ncols) && C[m*nrows+i] == u[i]) { zi = i; zj = m; return; }
     
-	for (vlvptr = vlvtop;  vlvptr != vend; ++vlvptr) // U\LU
-	  {
-	    c = *vlvptr;
-	    cred = C[c*nrows+i] - (u[i] + v[c]);
-	    if (cred < pi[c])
-	      {
-		pred[c] = i;
-		pi[c] = cred;
-		if (cred == 0)
-		  {
-		    if (varrho[c] == nrows || varrho[c] == n) { zi = nrows; zj = c; return; }
-		    j = *vlvtop; *vlvtop = c; *vlvptr = j; ++vlvtop;
-		  }
-	      }
-	  }
+        for (vlvptr = vlvtop;  vlvptr != vend; ++vlvptr) // U\LU
+          {
+            c = *vlvptr;
+            cred = C[c*nrows+i] - (u[i] + v[c]);
+            if (cred < pi[c])
+              {
+                pred[c] = i;
+                pi[c] = cred;
+                if (cred == 0)
+                  {
+                    if (varrho[c] == nrows || varrho[c] == n) { zi = nrows; zj = c; return; }
+                    j = *vlvtop; *vlvtop = c; *vlvptr = j; ++vlvtop;
+                  }
+              }
+          }
         
-	if (lvsvtop == vlvtop) // dual update
-	  {
-	    delta = std::numeric_limits<DT>::max(); lstcl = false;
-	    for (vlvptr = vlvtop;  vlvptr != vend; ++vlvptr) // V\LV
-	      if (pi[*vlvptr] < delta) delta = pi[*vlvptr];
-	    for (suptr = SU; *suptr != nrows; ++suptr) // last column
-	      {
-		cred = C[m*nrows+*suptr] - u[*suptr];
-		if (cred <= delta) { delta = cred; lstcl = true; zi = *suptr; }
-	      }
-	    for (suptr = SU; *suptr != nrows; ++suptr) u[*suptr] += delta;
-	    for (lvptr = V; lvptr != vlvtop; ++lvptr) v[*lvptr] -= delta;
-	    if (lstcl) { zj = m; return; }
-	    for (vlvptr = vlvtop;  vlvptr != vend; ++vlvptr) // V\LV
-	      {
-		pi[*vlvptr] -= delta;
-		if (pi[*vlvptr] == 0)
-		  {
-		    if (varrho[*vlvptr] == nrows || varrho[*vlvptr] == n) { zi = nrows; zj = *vlvptr; return; }
-		    c = *vlvtop; *vlvtop = *vlvptr; *vlvptr = c; ++vlvtop;
-		  }
-	      }
-	  } // end dual update
-	j = *lvsvtop; ++lvsvtop; // j is now in SV
-	//if (varrho[j] == -1 || varrho[j] == n) { zi = -1; zj = j; break; }
-	i = varrho[j];
+        if (lvsvtop == vlvtop) // dual update
+          {
+            delta = std::numeric_limits<DT>::max(); lstcl = false;
+            for (vlvptr = vlvtop;  vlvptr != vend; ++vlvptr) // V\LV
+              if (pi[*vlvptr] < delta) delta = pi[*vlvptr];
+            for (suptr = SU; *suptr != nrows; ++suptr) // last column
+              {
+                cred = C[m*nrows+*suptr] - u[*suptr];
+                if (cred <= delta) { delta = cred; lstcl = true; zi = *suptr; }
+              }
+            for (suptr = SU; *suptr != nrows; ++suptr) u[*suptr] += delta;
+            for (lvptr = V; lvptr != vlvtop; ++lvptr) v[*lvptr] -= delta;
+            if (lstcl) { zj = m; return; }
+            for (vlvptr = vlvtop;  vlvptr != vend; ++vlvptr) // V\LV
+              {
+                pi[*vlvptr] -= delta;
+                if (pi[*vlvptr] == 0)
+                  {
+                    if (varrho[*vlvptr] == nrows || varrho[*vlvptr] == n) { zi = nrows; zj = *vlvptr; return; }
+                    c = *vlvtop; *vlvtop = *vlvptr; *vlvptr = c; ++vlvtop;
+                  }
+              }
+          } // end dual update
+        j = *lvsvtop; ++lvsvtop; // j is now in SV
+        //if (varrho[j] == -1 || varrho[j] == n) { zi = -1; zj = j; break; }
+        i = varrho[j];
       }
   }
 
@@ -422,7 +422,7 @@ namespace liblsap {
   // -----------------------------------------------------------
   template<class DT, typename IT>
     void augmentingPathColLSAPE_forb(const IT &k, const DT *C, const IT &nrows, const IT &m, const IT *rho, const IT *varrho, 
-				     IT *U, IT *SV, IT *pred, DT *u, DT *v, DT *pi, IT &zi, IT &zj)
+                                     IT *U, IT *SV, IT *pred, DT *u, DT *v, DT *pi, IT &zi, IT &zj)
   {
     const IT n = nrows-1, ncols = m+1;
     IT i = 0, j = k, r = 0, *SVptr = SV, *ulutop = U, *uluptr = NULL;
@@ -436,53 +436,53 @@ namespace liblsap {
   
     while (true)
       {
-	*SVptr = j; *(++SVptr) = ncols;
+        *SVptr = j; *(++SVptr) = ncols;
     
-	// last row: null element epsilon, it is a sink of an alternating path
-	if (varrho[j] < n && C[j*nrows+n] == v[j]) { zi = n; zj = j; return; }
+        // last row: null element epsilon, it is a sink of an alternating path
+        if (varrho[j] < n && C[j*nrows+n] == v[j]) { zi = n; zj = j; return; }
     
-	for (uluptr = ulutop;  uluptr != uend; ++uluptr) // U\LU
-	  {
-	    r = *uluptr;
-	    if (C[j*nrows+r] < 0) continue; // check constraints on C (forbidden assignments)
-	    cred = C[j*nrows+r] - (u[r] + v[j]);
-	    if (cred < pi[r])
-	      {
-		pred[r] = j;
-		pi[r] = cred;
-		if (cred == 0)
-		  {
-		    if (rho[r] == ncols || rho[r] == m) { zi = r; zj = ncols; return; }
-		    i = *ulutop; *ulutop = r; *uluptr = i; ++ulutop;
-		  }
-	      }
-	  }
+        for (uluptr = ulutop;  uluptr != uend; ++uluptr) // U\LU
+          {
+            r = *uluptr;
+            if (C[j*nrows+r] < 0) continue; // check constraints on C (forbidden assignments)
+            cred = C[j*nrows+r] - (u[r] + v[j]);
+            if (cred < pi[r])
+              {
+                pred[r] = j;
+                pi[r] = cred;
+                if (cred == 0)
+                  {
+                    if (rho[r] == ncols || rho[r] == m) { zi = r; zj = ncols; return; }
+                    i = *ulutop; *ulutop = r; *uluptr = i; ++ulutop;
+                  }
+              }
+          }
     
-	if (lusutop == ulutop) // dual update
-	  {
-	    delta = std::numeric_limits<DT>::max(); lstrw = false;
-	    for (uluptr = ulutop;  uluptr != uend; ++uluptr) // U\LU
-	      if (pi[*uluptr] < delta) delta = pi[*uluptr];
-	    for (svptr = SV; *svptr != ncols; ++svptr) // last row
-	      {
-		cred = C[*svptr*nrows+n] - v[*svptr];
-		if (cred <= delta) { delta = cred; lstrw = true; zj = *svptr; }
-	      }
-	    for (svptr = SV; *svptr != ncols; ++svptr) v[*svptr] += delta;
-	    for (luptr = U; luptr != ulutop; ++luptr) u[*luptr] -= delta;
-	    if (lstrw) { zi = n; return; }
-	    for (uluptr = ulutop;  uluptr != uend; ++uluptr) // U\LU
-	      {
-		pi[*uluptr] -= delta;
-		if (pi[*uluptr] == 0)
-		  {
-		    if (rho[*uluptr] == ncols || rho[*uluptr] == m) { zi = *uluptr; zj = ncols; return; }
-		    r = *ulutop; *ulutop = *uluptr; *uluptr = r; ++ulutop;
-		  }
-	      }
-	  } // end dual update
-	i = *lusutop; ++lusutop; // i is now in SU
-	j = rho[i];
+        if (lusutop == ulutop) // dual update
+          {
+            delta = std::numeric_limits<DT>::max(); lstrw = false;
+            for (uluptr = ulutop;  uluptr != uend; ++uluptr) // U\LU
+              if (pi[*uluptr] < delta) delta = pi[*uluptr];
+            for (svptr = SV; *svptr != ncols; ++svptr) // last row
+              {
+                cred = C[*svptr*nrows+n] - v[*svptr];
+                if (cred <= delta) { delta = cred; lstrw = true; zj = *svptr; }
+              }
+            for (svptr = SV; *svptr != ncols; ++svptr) v[*svptr] += delta;
+            for (luptr = U; luptr != ulutop; ++luptr) u[*luptr] -= delta;
+            if (lstrw) { zi = n; return; }
+            for (uluptr = ulutop;  uluptr != uend; ++uluptr) // U\LU
+              {
+                pi[*uluptr] -= delta;
+                if (pi[*uluptr] == 0)
+                  {
+                    if (rho[*uluptr] == ncols || rho[*uluptr] == m) { zi = *uluptr; zj = ncols; return; }
+                    r = *ulutop; *ulutop = *uluptr; *uluptr = r; ++ulutop;
+                  }
+              }
+          } // end dual update
+        i = *lusutop; ++lusutop; // i is now in SU
+        j = rho[i];
       }
   }
 
@@ -492,7 +492,7 @@ namespace liblsap {
   // -----------------------------------------------------------
   template<class DT, typename IT>
     void augmentingPathRowLSAPE_forb(const IT &k, const DT *C, const IT &nrows, const IT &m, const IT *rho, const IT *varrho, 
-				     IT *V, IT *SU, IT *pred, DT *u, DT *v, DT *pi, IT &zi, IT &zj)
+                                     IT *V, IT *SU, IT *pred, DT *u, DT *v, DT *pi, IT &zi, IT &zj)
   {
     const IT n = nrows-1;
     IT *suptr = NULL, *lvptr = NULL, *vend = V+m, *lvsvtop = V;
@@ -506,53 +506,53 @@ namespace liblsap {
   
     while (true)
       {
-	*SUptr = i; *(++SUptr) = nrows;
+        *SUptr = i; *(++SUptr) = nrows;
     
-	// last column: null element epsilon, it is a sink of an alternating path
-	if (rho[i] < m && C[m*nrows+i] == u[i]) { zi = i; zj = m; return; }
+        // last column: null element epsilon, it is a sink of an alternating path
+        if (rho[i] < m && C[m*nrows+i] == u[i]) { zi = i; zj = m; return; }
     
-	for (vlvptr = vlvtop;  vlvptr != vend; ++vlvptr) // U\LU
-	  {
-	    c = *vlvptr;
-	    if (C[c*nrows+i] < 0) continue; // check constraints on C (forbidden assignments)
-	    cred = C[c*nrows+i] - (u[i] + v[c]);
-	    if (cred < pi[c])
-	      {
-		pred[c] = i;
-		pi[c] = cred;
-		if (cred == 0)
-		  {
-		    if (varrho[c] == nrows || varrho[c] == n) { zi = nrows; zj = c; return; }
-		    j = *vlvtop; *vlvtop = c; *vlvptr = j; ++vlvtop;
-		  }
-	      }
-	  }
+        for (vlvptr = vlvtop;  vlvptr != vend; ++vlvptr) // U\LU
+          {
+            c = *vlvptr;
+            if (C[c*nrows+i] < 0) continue; // check constraints on C (forbidden assignments)
+            cred = C[c*nrows+i] - (u[i] + v[c]);
+            if (cred < pi[c])
+              {
+                pred[c] = i;
+                pi[c] = cred;
+                if (cred == 0)
+                  {
+                    if (varrho[c] == nrows || varrho[c] == n) { zi = nrows; zj = c; return; }
+                    j = *vlvtop; *vlvtop = c; *vlvptr = j; ++vlvtop;
+                  }
+              }
+          }
         
-	if (lvsvtop == vlvtop) // dual update
-	  {
-	    delta = std::numeric_limits<DT>::max(); lstcl = false;
-	    for (vlvptr = vlvtop;  vlvptr != vend; ++vlvptr) // V\LV
-	      if (pi[*vlvptr] < delta) delta = pi[*vlvptr];
-	    for (suptr = SU; *suptr != nrows; ++suptr) // last column
-	      {
-		cred = C[m*nrows+*suptr] - u[*suptr];
-		if (cred <= delta) { delta = cred; lstcl = true; zi = *suptr; }
-	      }
-	    for (suptr = SU; *suptr != nrows; ++suptr) u[*suptr] += delta;
-	    for (lvptr = V; lvptr != vlvtop; ++lvptr) v[*lvptr] -= delta;
-	    if (lstcl) { zj = m; return; }
-	    for (vlvptr = vlvtop;  vlvptr != vend; ++vlvptr) // V\LV
-	      {
-		pi[*vlvptr] -= delta;
-		if (pi[*vlvptr] == 0)
-		  {
-		    if (varrho[*vlvptr] == nrows || varrho[*vlvptr] == n) { zi = nrows; zj = *vlvptr; return; }
-		    c = *vlvtop; *vlvtop = *vlvptr; *vlvptr = c; ++vlvtop;
-		  }
-	      }
-	  } // end dual update
-	j = *lvsvtop; ++lvsvtop; // j is now in SV
-	i = varrho[j];
+        if (lvsvtop == vlvtop) // dual update
+          {
+            delta = std::numeric_limits<DT>::max(); lstcl = false;
+            for (vlvptr = vlvtop;  vlvptr != vend; ++vlvptr) // V\LV
+              if (pi[*vlvptr] < delta) delta = pi[*vlvptr];
+            for (suptr = SU; *suptr != nrows; ++suptr) // last column
+              {
+                cred = C[m*nrows+*suptr] - u[*suptr];
+                if (cred <= delta) { delta = cred; lstcl = true; zi = *suptr; }
+              }
+            for (suptr = SU; *suptr != nrows; ++suptr) u[*suptr] += delta;
+            for (lvptr = V; lvptr != vlvtop; ++lvptr) v[*lvptr] -= delta;
+            if (lstcl) { zj = m; return; }
+            for (vlvptr = vlvtop;  vlvptr != vend; ++vlvptr) // V\LV
+              {
+                pi[*vlvptr] -= delta;
+                if (pi[*vlvptr] == 0)
+                  {
+                    if (varrho[*vlvptr] == nrows || varrho[*vlvptr] == n) { zi = nrows; zj = *vlvptr; return; }
+                    c = *vlvtop; *vlvtop = *vlvptr; *vlvptr = c; ++vlvtop;
+                  }
+              }
+          } // end dual update
+        j = *lvsvtop; ++lvsvtop; // j is now in SV
+        i = varrho[j];
       }
   }
 
@@ -591,136 +591,136 @@ namespace liblsap {
 
     if (init_type == 0)
       {
-	for (k = 0; k < n; k++) { rho[k] = ncols; u[k] = 0; }
-	for (k = 0; k < m; k++) { varrho[k] = nrows; v[k] = 0; }
+        for (k = 0; k < n; k++) { rho[k] = ncols; u[k] = 0; }
+        for (k = 0; k < m; k++) { varrho[k] = nrows; v[k] = 0; }
       }
   
     if (forb_assign)
       {
-	// initialization -----------------------------------------------
-	if (init_type == 1) basicPreprocLSAPE_forb<DT,IT>(C,nrows,ncols,rho,varrho,u,v,nass,mass);
+        // initialization -----------------------------------------------
+        if (init_type == 1) basicPreprocLSAPE_forb<DT,IT>(C,nrows,ncols,rho,varrho,u,v,nass,mass);
     
-	// augmentation of columns --------------------------------------
-	if (mass < m)
-	  {
-	    U = new IT[nrows]; S = new IT[ncols];  pi = new DT[n]; pred = new IT[n];
-	    for (k = 0; k < m; k++)
-	      if (varrho[k] == nrows)
-		{
-		  augmentingPathColLSAPE_forb<DT,IT>(k,C,nrows,m,rho,varrho,U,S,pred,u,v,pi,i,j);  // augment always finds an augmenting path
-		  if (i == n) { r = varrho[j]; varrho[j] = i; i = r; }
-		  else j = ncols;
-		  for (; j != k;)  // update primal solution = new partial assignment
-		    {
-		      j = pred[i]; rho[i] = j;
-		      r = varrho[j]; varrho[j] = i; i = r;
-		    }
-		}
-	    delete[] U; delete[] pred; delete[] pi; delete[] S;
-	  }
-	// augmentation of rows --------------------------------------
-	if (nass < n)
-	  {
-	    V = new IT[ncols]; S = new IT[nrows];  pi = new DT[m]; pred = new IT[m];
-	    for (k = 0; k < n; k++)
-	      if (rho[k] == ncols)
-		{
-		  augmentingPathRowLSAPE_forb<DT,IT>(k,C,nrows,m,rho,varrho,V,S,pred,u,v,pi,i,j);  // augment always finds an augmenting path
-		  if (j == m) { c = rho[i]; rho[i] = j; j = c; }
-		  else i = nrows;
-		  for (; i != k;)  // update primal solution = new partial assignment
-		    {
-		      i = pred[j]; varrho[j] = i;
-		      c = rho[i]; rho[i] = j; j = c;
-		    }
-		}
-	    delete[] V; delete[] pred; delete[] pi; delete[] S;
-	  }
+        // augmentation of columns --------------------------------------
+        if (mass < m)
+          {
+            U = new IT[nrows]; S = new IT[ncols];  pi = new DT[n]; pred = new IT[n];
+            for (k = 0; k < m; k++)
+              if (varrho[k] == nrows)
+                {
+                  augmentingPathColLSAPE_forb<DT,IT>(k,C,nrows,m,rho,varrho,U,S,pred,u,v,pi,i,j);  // augment always finds an augmenting path
+                  if (i == n) { r = varrho[j]; varrho[j] = i; i = r; }
+                  else j = ncols;
+                  for (; j != k;)  // update primal solution = new partial assignment
+                    {
+                      j = pred[i]; rho[i] = j;
+                      r = varrho[j]; varrho[j] = i; i = r;
+                    }
+                }
+            delete[] U; delete[] pred; delete[] pi; delete[] S;
+          }
+        // augmentation of rows --------------------------------------
+        if (nass < n)
+          {
+            V = new IT[ncols]; S = new IT[nrows];  pi = new DT[m]; pred = new IT[m];
+            for (k = 0; k < n; k++)
+              if (rho[k] == ncols)
+                {
+                  augmentingPathRowLSAPE_forb<DT,IT>(k,C,nrows,m,rho,varrho,V,S,pred,u,v,pi,i,j);  // augment always finds an augmenting path
+                  if (j == m) { c = rho[i]; rho[i] = j; j = c; }
+                  else i = nrows;
+                  for (; i != k;)  // update primal solution = new partial assignment
+                    {
+                      i = pred[j]; varrho[j] = i;
+                      c = rho[i]; rho[i] = j; j = c;
+                    }
+                }
+            delete[] V; delete[] pred; delete[] pi; delete[] S;
+          }
       }
     else
       {
-	//if (nrows < ncols)
-	//{
-	// initialization -----------------------------------------------
-	if (init_type == 1) basicPreprocColsLSAPE<DT,IT>(C,nrows,ncols,rho,varrho,u,v,nass,mass);
-	// augmentation of columns --------------------------------------
-	if (mass < m)
-	  {
-	    U = new IT[nrows]; S = new IT[ncols];  pi = new DT[n]; pred = new IT[n];
-	    for (k = 0; k < m; k++)
-	      if (varrho[k] == nrows)
-		{
-		  augmentingPathColLSAPE<DT,IT>(k,C,nrows,m,rho,varrho,U,S,pred,u,v,pi,i,j);  // augment always finds an augmenting path
-		  if (i == n) { r = varrho[j]; varrho[j] = i; i = r; }
-		  else j = ncols;
-		  for (; j != k;)  // update primal solution = new partial assignment
-		    {
-		      j = pred[i]; rho[i] = j;
-		      r = varrho[j]; varrho[j] = i; i = r;
-		    }
-		}
-	    delete[] U; delete[] pred; delete[] pi; delete[] S;
-	  }
-	// augmentation of rows --------------------------------------
-	if (nass < n)
-	  {
-	    V = new IT[ncols]; S = new IT[nrows];  pi = new DT[m]; pred = new IT[m];
-	    for (k = 0; k < n; k++)
-	      if (rho[k] == ncols)
-		{
-		  augmentingPathRowLSAPE<DT,IT>(k,C,nrows,m,rho,varrho,V,S,pred,u,v,pi,i,j);  // augment always finds an augmenting path
-		  if (j == m) { c = rho[i]; rho[i] = j; j = c; }
-		  else i = nrows;
-		  for (; i != k;)  // update primal solution = new partial assignment
-		    {
-		      i = pred[j]; varrho[j] = i;
-		      c = rho[i]; rho[i] = j; j = c;
-		    }
-		}
-	    delete[] V; delete[] pred; delete[] pi; delete[] S;
-	  }
-	//}
-	// else
-	// {
-	//   // augmentation of rows --------------------------------------
-	//   if (nass < n)
-	//   {
-	// 	V = new IT[ncols]; S = new IT[nrows];  pi = new DT[m]; pred = new IT[m];
-	// 	for (k = 0; k < n; k++)
-	// 	  if (rho[k] == -1)
-	// 	  {
-	// 	    augmentingPathRowLSAPE<DT,IT>(k,C,nrows,m,rho,varrho,V,S,pred,u,v,pi,i,j);  // augment always finds an augmenting path
-	// 	    if (j == m) { c = rho[i]; rho[i] = j; j = c; }
-	// 	    else i = -1;
-	// 	    for (; i != k;)  // update primal solution = new partial assignment
-	// 	    {
-	// 	      i = pred[j]; varrho[j] = i;
-	// 	      c = rho[i]; rho[i] = j; j = c;
-	// 	    }
-	// 	  }
-	// 	delete[] V; delete[] pred; delete[] pi; delete[] S;
-	//   }
-	//   // augmentation of columns --------------------------------------
-	//   if (mass < m)
-	//   {
-	
-	// 	U = new IT[nrows]; S = new IT[ncols];  pi = new DT[n]; pred = new IT[n];
-	// 	for (k = 0; k < m; k++)
-	// 	  if (varrho[k] == -1)
-	// 	  {
-	// 	    //	  std::cerr << "yo\n";
-	// 	    augmentingPathColLSAPE<DT,IT>(k,C,nrows,m,rho,varrho,U,S,pred,u,v,pi,i,j);  // augment always finds an augmenting path
-	// 	    if (i == n) { r = varrho[j]; varrho[j] = i; i = r; }
-	// 	    else j = -1;
-	// 	    for (; j != k;)  // update primal solution = new partial assignment
-	// 	    {
-	// 	      j = pred[i]; rho[i] = j;
-	// 	      r = varrho[j]; varrho[j] = i; i = r;
-	// 	    }
-	// 	  }
-	// 	delete[] U; delete[] pred; delete[] pi; delete[] S;
-	//   }
-	// }
+        //if (nrows < ncols)
+        //{
+        // initialization -----------------------------------------------
+        if (init_type == 1) basicPreprocColsLSAPE<DT,IT>(C,nrows,ncols,rho,varrho,u,v,nass,mass);
+        // augmentation of columns --------------------------------------
+        if (mass < m)
+          {
+            U = new IT[nrows]; S = new IT[ncols];  pi = new DT[n]; pred = new IT[n];
+            for (k = 0; k < m; k++)
+              if (varrho[k] == nrows)
+                {
+                  augmentingPathColLSAPE<DT,IT>(k,C,nrows,m,rho,varrho,U,S,pred,u,v,pi,i,j);  // augment always finds an augmenting path
+                  if (i == n) { r = varrho[j]; varrho[j] = i; i = r; }
+                  else j = ncols;
+                  for (; j != k;)  // update primal solution = new partial assignment
+                    {
+                      j = pred[i]; rho[i] = j;
+                      r = varrho[j]; varrho[j] = i; i = r;
+                    }
+                }
+            delete[] U; delete[] pred; delete[] pi; delete[] S;
+          }
+        // augmentation of rows --------------------------------------
+        if (nass < n)
+          {
+            V = new IT[ncols]; S = new IT[nrows];  pi = new DT[m]; pred = new IT[m];
+            for (k = 0; k < n; k++)
+              if (rho[k] == ncols)
+                {
+                  augmentingPathRowLSAPE<DT,IT>(k,C,nrows,m,rho,varrho,V,S,pred,u,v,pi,i,j);  // augment always finds an augmenting path
+                  if (j == m) { c = rho[i]; rho[i] = j; j = c; }
+                  else i = nrows;
+                  for (; i != k;)  // update primal solution = new partial assignment
+                    {
+                      i = pred[j]; varrho[j] = i;
+                      c = rho[i]; rho[i] = j; j = c;
+                    }
+                }
+            delete[] V; delete[] pred; delete[] pi; delete[] S;
+          }
+        //}
+        // else
+        // {
+        //   // augmentation of rows --------------------------------------
+        //   if (nass < n)
+        //   {
+        // 	V = new IT[ncols]; S = new IT[nrows];  pi = new DT[m]; pred = new IT[m];
+        // 	for (k = 0; k < n; k++)
+        // 	  if (rho[k] == -1)
+        // 	  {
+        // 	    augmentingPathRowLSAPE<DT,IT>(k,C,nrows,m,rho,varrho,V,S,pred,u,v,pi,i,j);  // augment always finds an augmenting path
+        // 	    if (j == m) { c = rho[i]; rho[i] = j; j = c; }
+        // 	    else i = -1;
+        // 	    for (; i != k;)  // update primal solution = new partial assignment
+        // 	    {
+        // 	      i = pred[j]; varrho[j] = i;
+        // 	      c = rho[i]; rho[i] = j; j = c;
+        // 	    }
+        // 	  }
+        // 	delete[] V; delete[] pred; delete[] pi; delete[] S;
+        //   }
+        //   // augmentation of columns --------------------------------------
+        //   if (mass < m)
+        //   {
+        
+        // 	U = new IT[nrows]; S = new IT[ncols];  pi = new DT[n]; pred = new IT[n];
+        // 	for (k = 0; k < m; k++)
+        // 	  if (varrho[k] == -1)
+        // 	  {
+        // 	    //	  std::cerr << "yo\n";
+        // 	    augmentingPathColLSAPE<DT,IT>(k,C,nrows,m,rho,varrho,U,S,pred,u,v,pi,i,j);  // augment always finds an augmenting path
+        // 	    if (i == n) { r = varrho[j]; varrho[j] = i; i = r; }
+        // 	    else j = -1;
+        // 	    for (; j != k;)  // update primal solution = new partial assignment
+        // 	    {
+        // 	      j = pred[i]; rho[i] = j;
+        // 	      r = varrho[j]; varrho[j] = i; i = r;
+        // 	    }
+        // 	  }
+        // 	delete[] U; delete[] pred; delete[] pi; delete[] S;
+        //   }
+        // }
       }
   }
 

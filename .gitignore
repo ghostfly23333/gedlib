@@ -11,6 +11,8 @@ ext/.INSTALLED
 /.cproject
 /.project
 /.pydevproject
+.vscode/
+.cache/
 *.so
 *.dylib
 *.o

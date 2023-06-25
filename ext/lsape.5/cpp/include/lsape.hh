@@ -29,7 +29,11 @@
 #include "utils.hh"
 #include "matchings.hh"
 #include "graphs.hh"
+#if CUDA_LSAPE
+#include "hungarian-lsape.cuh"
+#else
 #include "hungarian-lsape.h"
+#endif
 
 namespace liblsap {
 
