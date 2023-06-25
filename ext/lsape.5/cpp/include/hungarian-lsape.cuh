@@ -106,7 +106,6 @@ void hungarianLSAPE(
     const DT *C, const IT &nrows, const IT &ncols, IT *rho, IT *varrho, DT *u, \
     DT *v, unsigned short init_type = 1, bool forb_assign = false)
 
-DECL_TMPL(int, int);
 DECL_TMPL(double, int);
 
 } // namespace liblsap

@@ -1,680 +1,1128 @@
 #include <hungarian-lsape.cuh>
 
-#include <iostream>
-#include <limits>
-
+#include <assert.h>
+#include <chrono>
 #include <cuda.h>
 #include <cuda_runtime.h>
-#include <cuda_runtime_api.h>
+#include <device_functions.h>
+#include <device_launch_parameters.h>
+#include <random>
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
 
 namespace liblsap {
 
-__global__ void sampleKernel() {}
+// Fast Block Distributed CUDA Implementation of the Hungarian Algorithm
+//
+// Annex to the paper:
+// Paulo A. C. Lopes, Satyendra Singh Yadav, Aleksandar Ilic, Sarat Kumar Patra
+// , "Fast Block Distributed CUDA Implementation of the Hungarian Algorithm",
+// Journal Parallel Distributed Computing
+//
+// Hungarian algorithm:
+// (This algorithm was modified to result in an efficient GPU implementation,
+// see paper)
+//
+// Initialize the slack matrix with the cost matrix, and then work with the
+// slack matrix.
+//
+// STEP 1: Subtract the row minimum from each row. Subtract the column minimum
+// from each column.
+//
+// STEP 2: Find a zero of the slack matrix. If there are no starred zeros in its
+// column or row star the zero. Repeat for each zero.
+//
+// STEP 3: Cover each column with a starred zero. If all the columns are
+// covered then the matching is maximum.
+//
+// STEP 4: Find a non-covered zero and prime it. If there is no starred zero in
+// the row containing this primed zero, Go to Step 5. Otherwise, cover this row
+// and uncover the column containing the starred zero. Continue in this manner
+// until there are no uncovered zeros left. Save the smallest uncovered value
+// and Go to Step 6.
+//
+// STEP 5: Construct a series of alternating primed and starred zeros as
+// follows: Let Z0 represent the uncovered primed zero found in Step 4. Let Z1
+// denote the starred zero in the column of Z0(if any). Let Z2 denote the primed
+// zero in the row of Z1(there will always be one). Continue until the series
+// terminates at a primed zero that has no starred zero in its column. Un-star
+// each starred zero of the series, star each primed zero of the series, erase
+// all primes and uncover every row in the matrix. Return to Step 3.
+//
+// STEP 6: Add the minimum uncovered value to every element of each covered row,
+// and subtract it from every element of each uncovered column.
+// Return to Step 4 without altering any stars, primes, or covered rows.
 
-// -----------------------------------------------------------
-// Compute a initial partial assignment (rho,varrho) and associated dual
-// variables (u,v) according to min on rows and then to min on reduced columns
-// nass and mass are the number assigned elements in U and V respectively
-// -----------------------------------------------------------
-template <class DT, typename IT>
-void basicPreprocLSAPE(
-  const DT *C, const IT &nrows, const IT &ncols, IT *rho, IT *varrho, DT *u,
-  DT *v, IT &nass, IT &mass) {
-  const IT n = nrows - 1, m = ncols - 1;
-  IT i = 0, j;
-  DT mn, val;
-  nass = mass = 0;
-  u[n] = v[m] = 0;
+// Uncomment to use chars as the data type, otherwise use int
+// #define CHAR_DATA_TYPE
 
-  // find the min of each row
-  for (; i < n; i++) {
-    mn = std::numeric_limits<DT>::max();
-    for (j = 0; j < ncols; j++) {
-      const DT &c = C[j * nrows + i];
-      if (c < mn)
-        mn = c;
+// Uncomment to use a 4x4 predefined matrix for testing
+// #define USE_TEST_MATRIX
+
+// Comment to use managed variables instead of dynamic parallelism; usefull for
+// debugging #define DYNAMIC
+
+#define klog2(n)                                                               \
+  ((n < 8)                                                                     \
+     ? 2                                                                       \
+     : ((n < 16)                                                               \
+          ? 3                                                                  \
+          : ((n < 32)                                                          \
+               ? 4                                                             \
+               : ((n < 64)                                                     \
+                    ? 5                                                        \
+                    : ((n < 128)                                               \
+                         ? 6                                                   \
+                         : ((n < 256)                                          \
+                              ? 7                                              \
+                              : ((n < 512)                                     \
+                                   ? 8                                         \
+                                   : ((n < 1024)                               \
+                                        ? 9                                    \
+                                        : ((n < 2048)                          \
+                                             ? 10                              \
+                                             : ((n < 4096)                     \
+                                                  ? 11                         \
+                                                  : ((n < 8192)                \
+                                                       ? 12                    \
+                                                       : ((n < 16384)          \
+                                                            ? 13               \
+                                                            : 0))))))))))))
+
+#ifndef DYNAMIC
+#define MANAGED __managed__
+#define dh_checkCuda checkCuda
+#define dh_get_globaltime get_globaltime
+#define dh_get_timer_period get_timer_period
+#else
+#define dh_checkCuda d_checkCuda
+#define dh_get_globaltime d_get_globaltime
+#define dh_get_timer_period d_get_timer_period
+#define MANAGED
+#endif
+
+#define kmin(x, y) ((x < y) ? x : y)
+#define kmax(x, y) ((x > y) ? x : y)
+
+#ifndef USE_TEST_MATRIX
+#ifdef _n_
+// These values are meant to be changed by scripts
+const int n = _n_;         // size of the cost/pay matrix
+const int range = _range_; // defines the range of the random matrix.
+const int user_n = n;
+const int n_tests = 100;
+#else
+// User inputs: These values should be changed by the user
+const int user_n =
+  1000; // This is the size of the cost matrix as supplied by the user
+const int n =
+  1 << (klog2(user_n) + 1); // The size of the cost/pay matrix used in the
+                            // algorithm that is increased to a power of two
+const int range = n;        // defines the range of the random matrix.
+const int n_tests = 10;     // defines the number of tests performed
+#endif
+
+// End of user inputs
+
+const int log2_n = klog2(n); // log2(n)
+const int n_threads = kmin(
+  n,
+  64); // Number of threads used in small kernels grid size (typically grid size
+       // equal to n) Used in steps 3ini, 3, 4ini, 4a, 4b, 5a and 5b (64)
+const int n_threads_reduction = kmin(
+  n,
+  256); // Number of threads used in the redution kernels in step 1 and 6 (256)
+const int n_blocks_reduction = kmin(
+  n,
+  256); // Number of blocks used in the redution kernels in step 1 and 6 (256)
+const int n_threads_full =
+  kmin(n, 512); // Number of threads used the largest grids sizes (typically
+                // grid size equal to n*n) Used in steps 2 and 6 (512)
+const int seed = 45345; // Initialization for the random number generator
+
+#else
+const int n = 4;
+const int log2_n = 2;
+const int n_threads = 2;
+const int n_threads_reduction = 2;
+const int n_blocks_reduction = 2;
+const int n_threads_full = 2;
+#endif
+
+const int n_blocks =
+  n / n_threads; // Number of blocks used in small kernels grid size (typically
+                 // grid size equal to n)
+const int n_blocks_full =
+  n * n / n_threads_full; // Number of blocks used the largest gris sizes
+                          // (typically grid size equal to n*n)
+const int row_mask =
+  (1 << log2_n) - 1; // Used to extract the row from tha matrix position index
+                     // (matrices are column wise)
+const int nrows = n, ncols = n; // The matrix is square so the number of rows
+                                // and columns is equal to n
+const int max_threads_per_block =
+  1024; // The maximum number of threads per block
+const int columns_per_block_step_4 =
+  512; // Number of columns per block in step 4
+const int n_blocks_step_4 =
+  kmax(n / columns_per_block_step_4, 1); // Number of blocks in step 4 and 2
+const int data_block_size =
+  columns_per_block_step_4 * n; // The size of a data block. Note that this can
+                                // be bigger than the matrix size.
+const int log2_data_block_size =
+  log2_n +
+  klog2(columns_per_block_step_4); // log2 of the size of a data block. Note
+                                   // that klog2 cannot handle very large sizes
+
+// For the selection of the data type used
+#ifndef CHAR_DATA_TYPE
+typedef int data;
+#define MAX_DATA INT_MAX
+#define MIN_DATA INT_MIN
+#else
+typedef unsigned char data;
+#define MAX_DATA 255
+#define MIN_DATA 0
+#endif
+
+// Host Variables
+
+// Some host variables start with h_ to distinguish them from the corresponding
+// device variables Device variables have no prefix.
+
+struct HungarianCPUContext {
+#ifndef USE_TEST_MATRIX
+  data h_cost[ncols][nrows];
+#else
+  data h_cost[n][n] = {{1, 2, 3, 4}, {2, 4, 6, 8}, {3, 6, 9, 12}, {4, 8, 12, 16}};
+#endif
+  int h_column_of_star_at_row[nrows];
+  int h_row_of_star_at_column[ncols];
+  int h_zeros_vector_size;
+  int h_n_matches;
+  bool h_found;
+  bool h_goto_5;
+};
+
+// Device Variables
+struct HungarianGPUContext {
+  data slack[nrows * ncols]; // The slack matrix
+  data min_in_rows[nrows];   // Minimum in rows
+  data min_in_cols[ncols];   // Minimum in columns
+  int zeros[nrows * ncols];  // A vector with the position of the
+                                        // zeros in the slack matrix
+  int
+    zeros_size_b[n_blocks_step_4]; // The number of zeros in block i
+
+  int row_of_star_at_column[ncols]; // A vector that given the column
+                                               // j gives the row of the star at
+                                               // that column (or -1, no star)
+  int column_of_star_at_row[nrows]; // A vector that given the row i
+                                               // gives the column of the star
+                                               // at that row (or -1, no star)
+  int cover_row[nrows]; // A vector that given the row i indicates if
+                                   // it is covered (1- covered, 0- uncovered)
+  int
+    cover_column[ncols]; // A vector that given the column j indicates if it is
+                         // covered (1- covered, 0- uncovered)
+  int
+    column_of_prime_at_row[nrows]; // A vector that given the row i
+                                   // gives the column of the prime
+                                   // at that row  (or -1, no prime)
+  int row_of_green_at_column[ncols]; // A vector that given the row j
+                                                // gives the column of the green
+                                                // at that row (or -1, no green)
+
+  data
+    max_in_mat_row[nrows]; // Used in step 1 to stores the maximum in rows
+  data
+    min_in_mat_col[ncols]; // Used in step 1 to stores the minimums in columns
+  data
+    d_min_in_mat_vect[n_blocks_reduction]; // Used in step 6 to stores the
+                                           // intermediate results from the
+                                           // first reduction kernel
+  data d_min_in_mat; // Used in step 6 to store the minimum
+
+  int zeros_size; // The number fo zeros
+  int
+    n_matches; // Used in step 3 to count the number of matches found
+  bool goto_5; // After step 4, goto step 5?
+  bool
+    repeat_kernel; // Needs to repeat the step 2 and step 4 kernel?
+#if defined(DEBUG) || defined(_DEBUG)
+  int n_covered_rows; // Used in debug mode to check for the
+                                         // number of covered rows
+  int n_covered_columns; // Used in debug mode to check for
+                                            // the number of covered columns
+#endif
+
+};
+__shared__ extern data sdata[]; // For access to shared memory
+
+// -------------------------------------------------------------------------------------
+// Device code
+// -------------------------------------------------------------------------------------
+
+#if defined(DEBUG) || defined(_DEBUG)
+__global__ void convergence_check() {
+  int i = blockDim.x * blockIdx.x + threadIdx.x;
+  if (cover_column[i])
+    atomicAdd((int *)&n_covered_columns, 1);
+  if (cover_row[i])
+    atomicAdd((int *)&n_covered_rows, 1);
+}
+
+#endif
+
+// Convenience function for checking CUDA runtime API results
+// can be wrapped around any runtime API call. No-op in release builds.
+inline __device__ cudaError_t d_checkCuda(cudaError_t result) {
+#if defined(DEBUG) || defined(_DEBUG)
+  if (result != cudaSuccess) {
+    printf("CUDA Runtime Error: %s\n", cudaGetErrorString(result));
+    assert(result == cudaSuccess);
+  }
+#endif
+  return result;
+};
+
+__global__ void init(HungarianGPUContext *ctx) {
+  int i = blockDim.x * blockIdx.x + threadIdx.x;
+  // initializations
+  // for step 2
+  if (i < nrows) {
+    ctx->cover_row[i] = 0;
+    ctx->column_of_star_at_row[i] = -1;
+  }
+  if (i < ncols) {
+    ctx->cover_column[i] = 0;
+    ctx->row_of_star_at_column[i] = -1;
+  }
+}
+
+// STEP 1.
+// a) Subtracting the row by the minimum in each row
+const int n_rows_per_block = n / n_blocks_reduction;
+
+__device__ void min_in_rows_warp_reduce(volatile data *sdata, int tid) {
+  if (n_threads_reduction >= 64 && n_rows_per_block < 64)
+    sdata[tid] = min(sdata[tid], sdata[tid + 32]);
+  if (n_threads_reduction >= 32 && n_rows_per_block < 32)
+    sdata[tid] = min(sdata[tid], sdata[tid + 16]);
+  if (n_threads_reduction >= 16 && n_rows_per_block < 16)
+    sdata[tid] = min(sdata[tid], sdata[tid + 8]);
+  if (n_threads_reduction >= 8 && n_rows_per_block < 8)
+    sdata[tid] = min(sdata[tid], sdata[tid + 4]);
+  if (n_threads_reduction >= 4 && n_rows_per_block < 4)
+    sdata[tid] = min(sdata[tid], sdata[tid + 2]);
+  if (n_threads_reduction >= 2 && n_rows_per_block < 2)
+    sdata[tid] = min(sdata[tid], sdata[tid + 1]);
+}
+
+__global__ void calc_min_in_rows(HungarianGPUContext *ctx) {
+  __shared__ data
+    sdata[n_threads_reduction]; // One temporary result for each thread.
+
+  unsigned int tid = threadIdx.x;
+  unsigned int bid = blockIdx.x;
+  // One gets the line and column from the blockID and threadID.
+  unsigned int l = bid * n_rows_per_block + tid % n_rows_per_block;
+  unsigned int c = tid / n_rows_per_block;
+  unsigned int i = c * nrows + l;
+  const unsigned int gridSize = n_threads_reduction * n_blocks_reduction;
+  data thread_min = MAX_DATA;
+
+  while (i < n * n) {
+    thread_min = min(thread_min, ctx->slack[i]);
+    i += gridSize; // go to the next piece of the matrix...
+                   // gridSize = 2^k * n, so that each thread always processes
+                   // the same line or column
+  }
+  sdata[tid] = thread_min;
+
+  __syncthreads();
+  if (n_threads_reduction >= 1024 && n_rows_per_block < 1024) {
+    if (tid < 512) {
+      sdata[tid] = min(sdata[tid], sdata[tid + 512]);
     }
-    rho[i] = ncols;
-    u[i] = mn;
+    __syncthreads();
+  }
+  if (n_threads_reduction >= 512 && n_rows_per_block < 512) {
+    if (tid < 256) {
+      sdata[tid] = min(sdata[tid], sdata[tid + 256]);
+    }
+    __syncthreads();
+  }
+  if (n_threads_reduction >= 256 && n_rows_per_block < 256) {
+    if (tid < 128) {
+      sdata[tid] = min(sdata[tid], sdata[tid + 128]);
+    }
+    __syncthreads();
+  }
+  if (n_threads_reduction >= 128 && n_rows_per_block < 128) {
+    if (tid < 64) {
+      sdata[tid] = min(sdata[tid], sdata[tid + 64]);
+    }
+    __syncthreads();
+  }
+  if (tid < 32)
+    min_in_rows_warp_reduce(sdata, tid);
+  if (tid < n_rows_per_block)
+    ctx->min_in_rows[bid * n_rows_per_block + tid] = sdata[tid];
+}
+
+// a) Subtracting the column by the minimum in each column
+const int n_cols_per_block = n / n_blocks_reduction;
+
+__device__ void min_in_cols_warp_reduce(volatile data *sdata, int tid) {
+  if (n_threads_reduction >= 64 && n_cols_per_block < 64)
+    sdata[tid] = min(sdata[tid], sdata[tid + 32]);
+  if (n_threads_reduction >= 32 && n_cols_per_block < 32)
+    sdata[tid] = min(sdata[tid], sdata[tid + 16]);
+  if (n_threads_reduction >= 16 && n_cols_per_block < 16)
+    sdata[tid] = min(sdata[tid], sdata[tid + 8]);
+  if (n_threads_reduction >= 8 && n_cols_per_block < 8)
+    sdata[tid] = min(sdata[tid], sdata[tid + 4]);
+  if (n_threads_reduction >= 4 && n_cols_per_block < 4)
+    sdata[tid] = min(sdata[tid], sdata[tid + 2]);
+  if (n_threads_reduction >= 2 && n_cols_per_block < 2)
+    sdata[tid] = min(sdata[tid], sdata[tid + 1]);
+}
+
+__global__ void calc_min_in_cols(HungarianGPUContext *ctx) {
+  __shared__ data
+    sdata[n_threads_reduction]; // One temporary result for each thread
+
+  unsigned int tid = threadIdx.x;
+  unsigned int bid = blockIdx.x;
+  // One gets the line and column from the blockID and threadID.
+  unsigned int c = bid * n_cols_per_block + tid % n_cols_per_block;
+  unsigned int l = tid / n_cols_per_block;
+  const unsigned int gridSize = n_threads_reduction * n_blocks_reduction;
+  data thread_min = MAX_DATA;
+
+  while (l < n) {
+    unsigned int i = c * nrows + l;
+    thread_min = min(thread_min, ctx->slack[i]);
+    l += gridSize / n; // go to the next piece of the matrix...
+                       // gridSize = 2^k * n, so that each thread always
+                       // processes the same line or column
+  }
+  sdata[tid] = thread_min;
+
+  __syncthreads();
+  if (n_threads_reduction >= 1024 && n_cols_per_block < 1024) {
+    if (tid < 512) {
+      sdata[tid] = min(sdata[tid], sdata[tid + 512]);
+    }
+    __syncthreads();
+  }
+  if (n_threads_reduction >= 512 && n_cols_per_block < 512) {
+    if (tid < 256) {
+      sdata[tid] = min(sdata[tid], sdata[tid + 256]);
+    }
+    __syncthreads();
+  }
+  if (n_threads_reduction >= 256 && n_cols_per_block < 256) {
+    if (tid < 128) {
+      sdata[tid] = min(sdata[tid], sdata[tid + 128]);
+    }
+    __syncthreads();
+  }
+  if (n_threads_reduction >= 128 && n_cols_per_block < 128) {
+    if (tid < 64) {
+      sdata[tid] = min(sdata[tid], sdata[tid + 64]);
+    }
+    __syncthreads();
+  }
+  if (tid < 32)
+    min_in_cols_warp_reduce(sdata, tid);
+  if (tid < n_cols_per_block)
+    ctx->min_in_cols[bid * n_cols_per_block + tid] = sdata[tid];
+}
+
+__global__ void step_1_row_sub(HungarianGPUContext *ctx) {
+
+  int i = blockDim.x * blockIdx.x + threadIdx.x;
+  int l = i & row_mask;
+
+  ctx->slack[i] =
+    ctx->slack[i] -
+    ctx->min_in_rows[l]; // subtract the minimum in row from that row
+}
+
+__global__ void step_1_col_sub(HungarianGPUContext *ctx) {
+  int i = blockDim.x * blockIdx.x + threadIdx.x;
+  int c = i >> log2_n;
+  ctx->slack[i] =
+    ctx->slack[i] -
+    ctx->min_in_cols[c]; // subtract the minimum in row from that row
+
+  if (i == 0)
+    ctx->zeros_size = 0;
+  if (i < n_blocks_step_4)
+    ctx->zeros_size_b[i] = 0;
+}
+
+// Compress matrix
+__global__ void compress_matrix(HungarianGPUContext *ctx) {
+  int i = blockDim.x * blockIdx.x + threadIdx.x;
+
+  if (ctx->slack[i] == 0) {
+    atomicAdd(&ctx->zeros_size, 1);
+    int b = i >> log2_data_block_size;
+    int i0 = i & ~(data_block_size - 1); // == b << log2_data_block_size
+    int j = atomicAdd(ctx->zeros_size_b + b, 1);
+    ctx->zeros[i0 + j] = i;
+  }
+}
+
+// STEP 2
+// Find a zero of slack. If there are no starred zeros in its
+// column or row star the zero. Repeat for each zero.
+
+// The zeros are split through blocks of data so we run step 2 with several
+// thread blocks and rerun the kernel if repeat was set to true.
+__global__ void step_2(HungarianGPUContext *ctx) {
+  int i = threadIdx.x;
+  int b = blockIdx.x;
+  __shared__ bool repeat;
+  __shared__ bool s_repeat_kernel;
+
+  if (i == 0)
+    s_repeat_kernel = false;
+
+  do {
+    __syncthreads();
+    if (i == 0)
+      repeat = false;
+    __syncthreads();
+
+    for (int j = i; j < ctx->zeros_size_b[b]; j += blockDim.x) {
+      int z = ctx->zeros[(b << log2_data_block_size) + j];
+      int l = z & row_mask;
+      int c = z >> log2_n;
+
+      if (ctx->cover_row[l] == 0 && ctx->cover_column[c] == 0) {
+        // thread trys to get the line
+        if (!atomicExch((int *)&(ctx->cover_row[l]), 1)) {
+          // only one thread gets the line
+          if (!atomicExch((int *)&(ctx->cover_column[c]), 1)) {
+            // only one thread gets the column
+            ctx->row_of_star_at_column[c] = l;
+            ctx->column_of_star_at_row[l] = c;
+          } else {
+            ctx->cover_row[l] = 0;
+            repeat = true;
+            s_repeat_kernel = true;
+          }
+        }
+      }
+    }
+    __syncthreads();
+  } while (repeat);
+
+  if (s_repeat_kernel)
+    ctx->repeat_kernel = true;
+}
+
+// STEP 3
+// uncover all the rows and columns before going to step 3
+__global__ void step_3ini(HungarianGPUContext *ctx) {
+  int i = blockDim.x * blockIdx.x + threadIdx.x;
+  ctx->cover_row[i] = 0;
+  ctx->cover_column[i] = 0;
+  if (i == 0)
+    ctx->n_matches = 0;
+}
+
+// Cover each column with a starred zero. If all the columns are
+// covered then the matching is maximum
+__global__ void step_3(HungarianGPUContext *ctx) {
+  int i = blockDim.x * blockIdx.x + threadIdx.x;
+  if (ctx->row_of_star_at_column[i] >= 0) {
+    ctx->cover_column[i] = 1;
+    atomicAdd((int *)&ctx->n_matches, 1);
+  }
+}
+
+// STEP 4
+// Find a noncovered zero and prime it. If there is no starred
+// zero in the row containing this primed zero, go to Step 5.
+// Otherwise, cover this row and uncover the column containing
+// the starred zero. Continue in this manner until there are no
+// uncovered zeros left. Save the smallest uncovered value and
+// Go to Step 6.
+
+__global__ void step_4_init(HungarianGPUContext *ctx) {
+  int i = blockDim.x * blockIdx.x + threadIdx.x;
+  ctx->column_of_prime_at_row[i] = -1;
+  ctx->row_of_green_at_column[i] = -1;
+}
+
+__global__ void step_4(HungarianGPUContext *ctx) {
+  __shared__ bool s_found;
+  __shared__ bool s_goto_5;
+  __shared__ bool s_repeat_kernel;
+  volatile int *v_cover_row = ctx->cover_row;
+  volatile int *v_cover_column = ctx->cover_column;
+
+  int i = threadIdx.x;
+  int b = blockIdx.x;
+  // int limit; my__syncthreads_init(limit);
+
+  if (i == 0) {
+    s_repeat_kernel = false;
+    s_goto_5 = false;
   }
 
-  // find de min of each column
-  for (j = 0; j < m; j++) {
-    mn = std::numeric_limits<DT>::max();
-    for (i = 0; i < nrows; i++) {
-      val = C[j * nrows + i] - u[i];
-      if (val < mn)
-        mn = val;
+  do {
+    __syncthreads();
+    if (i == 0)
+      s_found = false;
+    __syncthreads();
+
+    for (int j = i; j < ctx->zeros_size_b[b]; j += blockDim.x) {
+      int z = ctx->zeros[(b << log2_data_block_size) + j];
+      int l = z & row_mask;
+      int c = z >> log2_n;
+      int c1 = ctx->column_of_star_at_row[l];
+
+      for (int n = 0; n < 10; n++) {
+
+        if (!v_cover_column[c] && !v_cover_row[l]) {
+          s_found = true;
+          s_repeat_kernel = true;
+          ctx->column_of_prime_at_row[l] = c;
+
+          if (c1 >= 0) {
+            v_cover_row[l] = 1;
+            __threadfence();
+            v_cover_column[c1] = 0;
+          } else {
+            s_goto_5 = true;
+          }
+        }
+      } // for(int n
+
+    } // for(int j
+    __syncthreads();
+  } while (s_found && !s_goto_5);
+
+  if (i == 0 && s_repeat_kernel)
+    ctx->repeat_kernel = true;
+  if (i == 0 && s_goto_5)
+    ctx->goto_5 = true;
+}
+
+/* STEP 5:
+Construct a series of alternating primed and starred zeros as
+follows:
+Let Z0 represent the uncovered primed zero found in Step 4.
+Let Z1 denote the starred zero in the column of Z0(if any).
+Let Z2 denote the primed zero in the row of Z1(there will always
+be one). Continue until the series terminates at a primed zero
+that has no starred zero in its column. Unstar each starred
+zero of the series, star each primed zero of the series, erase
+all primes and uncover every line in the matrix. Return to Step 3.*/
+
+// Eliminates joining paths
+__global__ void step_5a(HungarianGPUContext *ctx) {
+  int i = blockDim.x * blockIdx.x + threadIdx.x;
+
+  int r_Z0, c_Z0;
+
+  c_Z0 = ctx->column_of_prime_at_row[i];
+  if (c_Z0 >= 0 && ctx->column_of_star_at_row[i] < 0) {
+    ctx->row_of_green_at_column[c_Z0] = i;
+
+    while ((r_Z0 = ctx->row_of_star_at_column[c_Z0]) >= 0) {
+      c_Z0 = ctx->column_of_prime_at_row[r_Z0];
+      ctx->row_of_green_at_column[c_Z0] = r_Z0;
     }
-    v[j] = mn;
-    varrho[j] = nrows;
+  }
+}
+
+// Applies the alternating paths
+__global__ void step_5b(HungarianGPUContext *ctx) {
+  int j = blockDim.x * blockIdx.x + threadIdx.x;
+
+  int r_Z0, c_Z0, c_Z2;
+
+  r_Z0 = ctx->row_of_green_at_column[j];
+
+  if (r_Z0 >= 0 && ctx->row_of_star_at_column[j] < 0) {
+
+    c_Z2 = ctx->column_of_star_at_row[r_Z0];
+
+    ctx->column_of_star_at_row[r_Z0] = j;
+    ctx->row_of_star_at_column[j] = r_Z0;
+
+    while (c_Z2 >= 0) {
+      r_Z0 = ctx->row_of_green_at_column[c_Z2]; // row of Z2
+      c_Z0 = c_Z2;                              // col of Z2
+      c_Z2 = ctx->column_of_star_at_row[r_Z0];  // col of Z4
+
+      // star Z2
+      ctx->column_of_star_at_row[r_Z0] = c_Z0;
+      ctx->row_of_star_at_column[c_Z0] = r_Z0;
+    }
+  }
+}
+
+// STEP 6
+// Add the minimum uncovered value to every element of each covered
+// row, and subtract it from every element of each uncovered column.
+// Return to Step 4 without altering any stars, primes, or covered lines.
+
+template <unsigned int blockSize>
+__device__ void min_warp_reduce(volatile data *sdata, int tid) {
+  if (blockSize >= 64)
+    sdata[tid] = min(sdata[tid], sdata[tid + 32]);
+  if (blockSize >= 32)
+    sdata[tid] = min(sdata[tid], sdata[tid + 16]);
+  if (blockSize >= 16)
+    sdata[tid] = min(sdata[tid], sdata[tid + 8]);
+  if (blockSize >= 8)
+    sdata[tid] = min(sdata[tid], sdata[tid + 4]);
+  if (blockSize >= 4)
+    sdata[tid] = min(sdata[tid], sdata[tid + 2]);
+  if (blockSize >= 2)
+    sdata[tid] = min(sdata[tid], sdata[tid + 1]);
+}
+
+template <unsigned int blockSize> // blockSize is the size of a block of threads
+__device__ void
+min_reduce1(HungarianGPUContext *gpu_ctx, volatile data *g_idata, volatile data *g_odata, unsigned int n) {
+  unsigned int tid = threadIdx.x;
+  unsigned int i = blockIdx.x * (blockSize * 2) + tid;
+  unsigned int gridSize = blockSize * 2 * gridDim.x;
+  sdata[tid] = MAX_DATA;
+
+  while (i < n) {
+    int i1 = i;
+    int i2 = i + blockSize;
+    int l1 = i1 & row_mask;
+    int c1 = i1 >> log2_n;
+    data g1;
+    if (gpu_ctx->cover_row[l1] == 1 || gpu_ctx->cover_column[c1] == 1)
+      g1 = MAX_DATA;
+    else
+      g1 = g_idata[i1];
+    int l2 = i2 & row_mask;
+    int c2 = i2 >> log2_n;
+    data g2;
+    if (gpu_ctx->cover_row[l2] == 1 || gpu_ctx->cover_column[c2] == 1)
+      g2 = MAX_DATA;
+    else
+      g2 = g_idata[i2];
+    sdata[tid] = min(sdata[tid], min(g1, g2));
+    i += gridSize;
   }
 
-  // assign
-  for (i = 0; i < n; i++) {
-    for (j = 0; j < m; j++) {
-      if (
-        rho[i] == ncols && varrho[j] == nrows &&
-        C[j * nrows + i] == u[i] + v[j]) {
-        rho[i] = j;
-        varrho[j] = i;
-        nass++;
-        mass++;
+  __syncthreads();
+  if (blockSize >= 1024) {
+    if (tid < 512) {
+      sdata[tid] = min(sdata[tid], sdata[tid + 512]);
+    }
+    __syncthreads();
+  }
+  if (blockSize >= 512) {
+    if (tid < 256) {
+      sdata[tid] = min(sdata[tid], sdata[tid + 256]);
+    }
+    __syncthreads();
+  }
+  if (blockSize >= 256) {
+    if (tid < 128) {
+      sdata[tid] = min(sdata[tid], sdata[tid + 128]);
+    }
+    __syncthreads();
+  }
+  if (blockSize >= 128) {
+    if (tid < 64) {
+      sdata[tid] = min(sdata[tid], sdata[tid + 64]);
+    }
+    __syncthreads();
+  }
+  if (tid < 32)
+    min_warp_reduce<blockSize>(sdata, tid);
+  if (tid == 0)
+    g_odata[blockIdx.x] = sdata[0];
+}
+
+template <unsigned int blockSize>
+__device__ void
+min_reduce2(HungarianGPUContext *gpu_ctx, volatile data *g_idata, volatile data *g_odata, unsigned int n) {
+  unsigned int tid = threadIdx.x;
+  unsigned int i = blockIdx.x * (blockSize * 2) + tid;
+
+  sdata[tid] = min(g_idata[i], g_idata[i + blockSize]);
+
+  __syncthreads();
+  if (blockSize >= 1024) {
+    if (tid < 512) {
+      sdata[tid] = min(sdata[tid], sdata[tid + 512]);
+    }
+    __syncthreads();
+  }
+  if (blockSize >= 512) {
+    if (tid < 256) {
+      sdata[tid] = min(sdata[tid], sdata[tid + 256]);
+    }
+    __syncthreads();
+  }
+  if (blockSize >= 256) {
+    if (tid < 128) {
+      sdata[tid] = min(sdata[tid], sdata[tid + 128]);
+    }
+    __syncthreads();
+  }
+  if (blockSize >= 128) {
+    if (tid < 64) {
+      sdata[tid] = min(sdata[tid], sdata[tid + 64]);
+    }
+    __syncthreads();
+  }
+  if (tid < 32)
+    min_warp_reduce<blockSize>(sdata, tid);
+  if (tid == 0)
+    g_odata[blockIdx.x] = sdata[0];
+}
+
+__global__ void step_6_add_sub(HungarianGPUContext *ctx) {
+  // STEP 6:
+  //	/*STEP 6: Add the minimum uncovered value to every element of each
+  // covered 	row, and subtract it from every element of each uncovered
+  // column. 	Return to Step 4 without altering any stars, primes, or covered
+  // lines.
+  //*/
+  int i = blockDim.x * blockIdx.x + threadIdx.x;
+  int l = i & row_mask;
+  int c = i >> log2_n;
+  if (ctx->cover_row[l] == 1 && ctx->cover_column[c] == 1)
+    ctx->slack[i] += ctx->d_min_in_mat;
+  if (ctx->cover_row[l] == 0 && ctx->cover_column[c] == 0)
+    ctx->slack[i] -= ctx->d_min_in_mat;
+
+  if (i == 0)
+    ctx->zeros_size = 0;
+  if (i < n_blocks_step_4)
+    ctx->zeros_size_b[i] = 0;
+}
+
+__global__ void min_reduce_kernel1(HungarianGPUContext *ctx) {
+  min_reduce1<n_threads_reduction>(ctx, ctx->slack, ctx->d_min_in_mat_vect, nrows * ncols);
+}
+
+__global__ void min_reduce_kernel2(HungarianGPUContext *ctx) {
+  min_reduce2<n_threads_reduction / 2>(ctx, ctx->d_min_in_mat_vect, &ctx->d_min_in_mat, n_blocks_reduction);
+}
+
+__device__ inline long long int d_get_globaltime(void) {
+  long long int ret;
+
+  asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(ret));
+
+  return ret;
+}
+
+// Returns the period in miliseconds
+__device__ inline double d_get_timer_period(void) { return 1.0e-6; }
+
+// -------------------------------------------------------------------------------------
+// Host code
+// -------------------------------------------------------------------------------------
+
+// Convenience function for checking CUDA runtime API results
+// can be wrapped around any runtime API call. No-op in release builds.
+inline cudaError_t checkCuda(cudaError_t result) {
+#if defined(DEBUG) || defined(_DEBUG)
+  if (result != cudaSuccess) {
+    printf("CUDA Runtime Error: %s\n", cudaGetErrorString(result));
+    assert(result == cudaSuccess);
+  }
+#endif
+  return result;
+};
+
+typedef std::chrono::high_resolution_clock::rep hr_clock_rep;
+
+inline hr_clock_rep get_globaltime(void) {
+  using namespace std::chrono;
+  return high_resolution_clock::now().time_since_epoch().count();
+}
+
+// Returns the period in miliseconds
+inline double get_timer_period(void) {
+  using namespace std::chrono;
+  return 1000.0 * high_resolution_clock::period::num /
+         high_resolution_clock::period::den;
+}
+
+#define declare_kernel(k)                                                      \
+  hr_clock_rep k##_time = 0;                                                   \
+  int k##_runs = 0
+
+#define call_kernel(k, n_blocks, n_threads, ctx)                               \
+  call_kernel_s(k, n_blocks, n_threads, 0ll, ctx)
+
+#define call_kernel_s(k, n_blocks, n_threads, shared, ctx)                     \
+  {                                                                            \
+    timer_start = dh_get_globaltime();                                         \
+    k<<<n_blocks, n_threads, shared>>>(ctx);                                   \
+    dh_checkCuda(cudaDeviceSynchronize());                                     \
+    timer_stop = dh_get_globaltime();                                          \
+    k##_time += timer_stop - timer_start;                                      \
+    k##_runs++;                                                                \
+  }
+// printf("Finished kernel " #k "(%d,%d,%lld)\n", n_blocks, n_threads, shared);			\
+// fflush(0);											\
+
+#define kernel_stats(k)                                                        \
+  printf(#k "\t %g \t %d\n", dh_get_timer_period() * k##_time, k##_runs)
+
+// Hungarian_Algorithm
+void Hungarian_Algorithm(HungarianCPUContext *cpu_ctx)
+{
+  hr_clock_rep timer_start, timer_stop;
+  hr_clock_rep total_time_start, total_time_stop;
+#if defined(DEBUG) || defined(_DEBUG)
+  int last_n_covered_rows = 0, last_n_matches = 0;
+#endif
+
+  HungarianGPUContext *gpu_ctx;
+  checkCuda(cudaMalloc(&gpu_ctx, sizeof(HungarianGPUContext)));
+
+  // Copy vectors from host memory to device memory
+    cudaMemcpyToSymbol(
+      gpu_ctx->slack, cpu_ctx->h_cost,
+      sizeof(data) * nrows * ncols); // symbol refers to the device memory hence
+                                     // "To" means from Host to Device
+
+  declare_kernel(init);
+  declare_kernel(calc_min_in_rows);
+  declare_kernel(step_1_row_sub);
+  declare_kernel(calc_min_in_cols);
+  declare_kernel(step_1_col_sub);
+  declare_kernel(compress_matrix);
+  declare_kernel(step_2);
+  declare_kernel(step_3ini);
+  declare_kernel(step_3);
+  declare_kernel(step_4_init);
+  declare_kernel(step_4);
+  declare_kernel(min_reduce_kernel1);
+  declare_kernel(min_reduce_kernel2);
+  declare_kernel(step_6_add_sub);
+  declare_kernel(step_5a);
+  declare_kernel(step_5b);
+  declare_kernel(step_5c);
+
+  total_time_start = dh_get_globaltime();
+
+  // Initialization
+  call_kernel(init, n_blocks, n_threads, gpu_ctx);
+
+  // Step 1 kernels
+  call_kernel(calc_min_in_rows, n_blocks_reduction, n_threads_reduction, gpu_ctx);
+  call_kernel(step_1_row_sub, n_blocks_full, n_threads_full, gpu_ctx);
+  call_kernel(calc_min_in_cols, n_blocks_reduction, n_threads_reduction, gpu_ctx);
+  call_kernel(step_1_col_sub, n_blocks_full, n_threads_full, gpu_ctx);
+
+  // compress_matrix
+  call_kernel(compress_matrix, n_blocks_full, n_threads_full, gpu_ctx);
+
+  // Step 2 kernels
+  do {
+    gpu_ctx->repeat_kernel = false;
+    dh_checkCuda(cudaDeviceSynchronize());
+    call_kernel(
+      step_2, n_blocks_step_4,
+      (n_blocks_step_4 > 1 || gpu_ctx->zeros_size > max_threads_per_block)
+        ? max_threads_per_block
+        : gpu_ctx->zeros_size, gpu_ctx);
+    // If we have more than one block it means that we have 512 lines per block
+    // so 1024 threads should be adequate.
+  } while (gpu_ctx->repeat_kernel);
+
+  while (1) { // repeat steps 3 to 6
+
+    // Step 3 kernels
+    call_kernel(step_3ini, n_blocks, n_threads, gpu_ctx);
+    call_kernel(step_3, n_blocks, n_threads, gpu_ctx);
+
+    if (gpu_ctx->n_matches >= ncols)
+      break; // It's done
+
+    // step 4_kernels
+    call_kernel(step_4_init, n_blocks, n_threads, gpu_ctx);
+
+    while (1) // repeat step 4 and 6
+    {
+#if defined(DEBUG) || defined(_DEBUG)
+      // At each iteraton either the number of matched or covered rows has to
+      // increase. If we went to step 5 the number of matches increases. If we
+      // went to step 6 the number of covered rows increases.
+      n_covered_rows = 0;
+      n_covered_columns = 0;
+      dh_checkCuda(cudaDeviceSynchronize());
+      convergence_check<<<n_blocks, n_threads>>>();
+      dh_checkCuda(cudaDeviceSynchronize());
+      assert(
+        n_matches > last_n_matches || n_covered_rows > last_n_covered_rows);
+      assert(n_matches == n_covered_columns + n_covered_rows);
+      last_n_matches = n_matches;
+      last_n_covered_rows = n_covered_rows;
+#endif
+      do { // step 4 loop
+        gpu_ctx->goto_5 = false;
+        gpu_ctx->repeat_kernel = false;
+        dh_checkCuda(cudaDeviceSynchronize());
+
+        call_kernel(
+          step_4, n_blocks_step_4,
+          (n_blocks_step_4 > 1 || gpu_ctx->zeros_size > max_threads_per_block)
+            ? max_threads_per_block
+            : gpu_ctx->zeros_size, gpu_ctx);
+        // If we have more than one block it means that we have 512 lines per
+        // block so 1024 threads should be adequate.
+
+      } while (gpu_ctx->repeat_kernel && !gpu_ctx->goto_5);
+
+      if (gpu_ctx->goto_5)
         break;
-      }
-    }
-    // last column
-    if (rho[i] == ncols && C[m * nrows + i] == u[i]) {
-      rho[i] = m;
-      nass++;
-    }
-  }
 
-  // last row
-  for (j = 0; j < m; j++)
-    if (varrho[j] == nrows && C[j * nrows + n] == v[j]) {
-      varrho[j] = n;
-      mass++;
-    }
+      // step 6_kernel
+      call_kernel_s(
+        min_reduce_kernel1, n_blocks_reduction, n_threads_reduction,
+        n_threads_reduction * sizeof(int), gpu_ctx);
+      call_kernel_s(
+        min_reduce_kernel2, 1, n_blocks_reduction / 2,
+        (n_blocks_reduction / 2) * sizeof(int), gpu_ctx);
+      call_kernel(step_6_add_sub, n_blocks_full, n_threads_full, gpu_ctx);
+
+      // compress_matrix
+      call_kernel(compress_matrix, n_blocks_full, n_threads_full, gpu_ctx);
+
+    } // repeat step 4 and 6
+
+    call_kernel(step_5a, n_blocks, n_threads, gpu_ctx);
+    call_kernel(step_5b, n_blocks, n_threads, gpu_ctx);
+
+  } // repeat steps 3 to 6
+
+  total_time_stop = dh_get_globaltime();
+
+  printf("kernel \t time (ms) \t runs\n");
+
+  kernel_stats(init);
+  kernel_stats(calc_min_in_rows);
+  kernel_stats(step_1_row_sub);
+  kernel_stats(calc_min_in_cols);
+  kernel_stats(step_1_col_sub);
+  kernel_stats(compress_matrix);
+  kernel_stats(step_2);
+  kernel_stats(step_3ini);
+  kernel_stats(step_3);
+  kernel_stats(step_4_init);
+  kernel_stats(step_4);
+  kernel_stats(min_reduce_kernel1);
+  kernel_stats(min_reduce_kernel2);
+  kernel_stats(step_6_add_sub);
+  kernel_stats(step_5a);
+  kernel_stats(step_5b);
+  kernel_stats(step_5c);
+
+  printf(
+    "Total time(ms) \t %g\n",
+    dh_get_timer_period() * (total_time_stop - total_time_start));
+
+
+  checkCuda(cudaDeviceSynchronize());
+
+  // Copy assignments from Device to Host and calculate the total Cost
+  cudaMemcpyFromSymbol(
+    cpu_ctx->h_column_of_star_at_row, gpu_ctx->column_of_star_at_row, nrows * sizeof(int));
+  cudaMemcpyFromSymbol(
+    cpu_ctx->h_row_of_star_at_column, gpu_ctx->row_of_star_at_column, ncols * sizeof(int));
 }
 
-// -----------------------------------------------------------
-// Compute a initial partial assignment (rho,varrho) and associated dual
-// variables (u,v) according to min on rows and then to min on reduced columns
-// nass and mass are the number assigned elements in U and V respectively
-// -----------------------------------------------------------
-template <class DT, typename IT>
-void basicPreprocRowsLSAPE(
-  const DT *C, const IT &nrows, const IT &ncols, IT *rho, IT *varrho, DT *u,
-  DT *v, IT &nass, IT &mass) {
-  const IT n = nrows - 1, m = ncols - 1;
-  IT i = 0, j;
-  DT mn, val;
-  nass = mass = 0;
-  u[n] = v[m] = 0;
-
-  // find the min of each row
-  for (; i < n; i++) {
-    mn = std::numeric_limits<DT>::max();
-    for (j = 0; j < ncols; j++) {
-      const DT &c = C[j * nrows + i];
-      if (c < mn)
-        mn = c;
-    }
-    rho[i] = ncols;
-    u[i] = mn;
-  }
-
-  // find de min of each column
-  for (j = 0; j < m; j++) {
-    v[j] = 0;
-    varrho[j] = nrows;
-  }
-
-  // assign
-  for (i = 0; i < n; i++) {
-    for (j = 0; j < m; j++) {
-      if (
-        rho[i] == ncols && varrho[j] == nrows &&
-        C[j * nrows + i] == u[i] + v[j]) {
-        rho[i] = j;
-        varrho[j] = i;
-        nass++;
-        mass++;
-        break;
-      }
-    }
-    // last column
-    if (rho[i] == ncols && C[m * nrows + i] == u[i]) {
-      rho[i] = m;
-      nass++;
-    }
-  }
-
-  // last row
-  for (j = 0; j < m; j++)
-    if (varrho[j] == nrows && C[j * nrows + n] == v[j]) {
-      varrho[j] = n;
-      mass++;
-    }
-}
-
-// -----------------------------------------------------------
-template <class DT, typename IT>
-void basicPreprocColsLSAPE(
-  const DT *C, const IT &nrows, const IT &ncols, IT *rho, IT *varrho, DT *u,
-  DT *v, IT &nass, IT &mass) {
-  const IT n = nrows - 1, m = ncols - 1;
-  IT i = 0, j = 0;
-  DT mn, val;
-  nass = mass = 0;
-  u[n] = v[m] = 0;
-
-  // find the min of each col
-  for (; j < m; j++) {
-    mn = std::numeric_limits<DT>::max();
-    for (i = 0; i < nrows; i++) {
-      const DT &c = C[j * nrows + i];
-      if (c < mn)
-        mn = c;
-    }
-    varrho[j] = nrows;
-    v[j] = mn;
-  }
-
-  // find de min of each row
-  for (i = 0; i < n; i++) {
-    mn = std::numeric_limits<DT>::max();
-    for (j = 0; j < ncols; j++) {
-      val = C[j * nrows + i] - v[j];
-      if (val < mn)
-        mn = val;
-    }
-    u[i] = mn;
-    rho[i] = ncols;
-  }
-
-  // assign
-  for (j = 0; j < m; j++) {
-    for (i = 0; i < n; i++) {
-      if (
-        rho[i] == ncols && varrho[j] == nrows &&
-        C[j * nrows + i] == u[i] + v[j]) {
-        rho[i] = j;
-        varrho[j] = i;
-        nass++;
-        mass++;
-        break;
-      }
-    }
-    // last row n
-    if (varrho[j] == nrows && C[j * nrows + n] == v[j]) {
-      varrho[j] = n;
-      mass++;
-    }
-  }
-
-  // last column
-  for (i = 0; i < n; i++)
-    if (rho[i] == ncols && C[m * nrows + i] == u[i]) {
-      rho[i] = m;
-      nass++;
-    }
-}
-
-// -----------------------------------------------------------
-// same as above but with forbidden assignments
-// -----------------------------------------------------------
-template <class DT, typename IT>
-void basicPreprocLSAPE_forb(
-  const DT *C, const IT &nrows, const IT &ncols, IT *rho, IT *varrho, DT *u,
-  DT *v, IT &nass, IT &mass) {
-  const IT n = nrows - 1, m = ncols - 1;
-  IT i = 0, j;
-  DT mn, val;
-  nass = mass = 0;
-  u[n] = v[m] = 0;
-
-  // find the min of each row
-  for (; i < n; i++) {
-    mn = std::numeric_limits<DT>::max();
-    for (j = 0; j < ncols; j++) {
-      const DT &c = C[j * nrows + i];
-      if (c < 0)
-        continue;
-      if (c < mn)
-        mn = c;
-    }
-    rho[i] = ncols;
-    u[i] = mn;
-  }
-
-  // find de min of each column
-  for (j = 0; j < m; j++) {
-    mn = std::numeric_limits<DT>::max();
-    for (i = 0; i < nrows; i++) {
-      const DT &c = C[j * nrows + i];
-      if (c < 0)
-        continue;
-      val = c - u[i];
-      if (val < mn)
-        mn = val;
-    }
-    v[j] = mn;
-    varrho[j] = nrows;
-  }
-
-  // assign
-  for (i = 0; i < n; i++) {
-    for (j = 0; j < m; j++) {
-      const DT &c = C[j * nrows + i];
-      if (c < 0)
-        continue;
-      if (rho[i] == ncols && varrho[j] == nrows && c == u[i] + v[j]) {
-        rho[i] = j;
-        varrho[j] = i;
-        nass++;
-        mass++;
-        break;
-      }
-    }
-    // last column
-    if (rho[i] == ncols && C[m * nrows + i] == u[i]) {
-      rho[i] = m;
-      nass++;
-    }
-  }
-
-  // last row
-  for (j = 0; j < m; j++)
-    if (varrho[j] == nrows && C[j * nrows + n] == v[j]) {
-      varrho[j] = n;
-      mass++;
-    }
-}
-
-// -----------------------------------------------------------
-// Construct an alternating tree rooted in an element of V
-// and perform dual updates until an augmenting path is found
-// -----------------------------------------------------------
-template <class DT, typename IT>
-void augmentingPathColLSAPE(
-  const IT &k, const DT *C, const IT &nrows, const IT &m, const IT *rho,
-  const IT *varrho, IT *U, IT *SV, IT *pred, DT *u, DT *v, DT *pi, IT &zi,
-  IT &zj) {
-  const IT n = nrows - 1, ncols = m + 1;
-  IT i = 0, j = k, r = 0, *SVptr = SV, *ulutop = U, *uluptr = NULL;
-  DT delta = 0, cred = 0, zero = 0;
-  const IT *svptr = NULL, *luptr = NULL, *uend = U + n, *lusutop = U;
-  bool lstrw = false;
-  //*SV = -1;
-  //    zj = zi = -1;
-
-  for (i = 0; i < n; i++) {
-    pi[i] = std::numeric_limits<DT>::max();
-    U[i] = i;
-  }
-
-  while (true) {
-    *SVptr = j;
-    *(++SVptr) = ncols;
-    // last row: null element epsilon, it is a sink of an alternating path
-    if ((varrho[j] < n || varrho[j] == nrows) && C[j * nrows + n] == v[j]) {
-      zi = n;
-      zj = j;
-      return;
-    }
-
-    for (uluptr = ulutop; uluptr != uend; ++uluptr) // U\LU
-    {
-      r = *uluptr;
-      cred = C[j * nrows + r] - (u[r] + v[j]);
-      if (cred < pi[r]) {
-        pred[r] = j;
-        pi[r] = cred;
-        if (cred == zero) {
-          if (rho[r] == ncols || rho[r] == m) {
-            zi = r;
-            zj = ncols;
-            return;
-          }
-          i = *ulutop;
-          *ulutop = r;
-          *uluptr = i;
-          ++ulutop;
-        }
-      }
-    }
-
-    if (lusutop == ulutop) // dual update
-    {
-      delta = std::numeric_limits<DT>::max();
-      lstrw = false;
-      for (uluptr = ulutop; uluptr != uend; ++uluptr) // U\LU
-        if (pi[*uluptr] < delta)
-          delta = pi[*uluptr];
-      for (svptr = SV; *svptr != ncols; ++svptr) // last row
-      {
-        cred = C[*svptr * nrows + n] - v[*svptr];
-        if (cred <= delta) {
-          delta = cred;
-          lstrw = true;
-          zj = *svptr;
-        }
-      }
-      for (svptr = SV; *svptr != ncols; ++svptr)
-        v[*svptr] += delta;
-      for (luptr = U; luptr != ulutop; ++luptr)
-        u[*luptr] -= delta;
-      if (lstrw) {
-        zi = n;
-        return;
-      }
-      for (uluptr = ulutop; uluptr != uend; ++uluptr) // U\LU
-      {
-        pi[*uluptr] -= delta;
-        if (pi[*uluptr] == 0) {
-          if (rho[*uluptr] == ncols || rho[*uluptr] == m) {
-            zi = *uluptr;
-            zj = ncols;
-            return;
-          }
-          r = *ulutop;
-          *ulutop = *uluptr;
-          *uluptr = r;
-          ++ulutop;
-        }
-      }
-    } // end dual update
-    i = *lusutop;
-    ++lusutop; // i is now in SU
-    j = rho[i];
+// Used to make sure some constants are properly set
+void check(bool val, const char *str) {
+  if (!val) {
+    printf("Check failed: %s!\n", str);
+    getchar();
+    exit(-1);
   }
 }
 
-// -----------------------------------------------------------
-// Construct an alternating tree rooted in an element of U
-// and perform dual updates until an augmenting path is found
-// -----------------------------------------------------------
-template <class DT, typename IT>
-void augmentingPathRowLSAPE(
-  const IT &k, const DT *C, const IT &nrows, const IT &m, const IT *rho,
-  const IT *varrho, IT *V, IT *SU, IT *pred, DT *u, DT *v, DT *pi, IT &zi,
-  IT &zj) {
-  const IT n = nrows - 1, ncols = m + 1;
-  IT *suptr = NULL, *lvptr = NULL, *vend = V + m, *lvsvtop = V;
-  IT i = k, j = 0, c = 0, *SUptr = SU, *vlvtop = V, *vlvptr = NULL;
-  DT delta = 0, cred = 0;
-  bool lstcl = false;
-  //*SU = -1;
-  // zj = zi = -1;
+int main() {
+  // Constant checks:
+  check(n == (1 << log2_n), "Incorrect log2_n!");
+  check(n_threads * n_blocks == n, "n_threads*n_blocks != n\n");
+  // step 1
+  check(
+    n_blocks_reduction <= n, "Step 1: Should have several lines per block!");
+  check(
+    n % n_blocks_reduction == 0,
+    "Step 1: Number of lines per block should be integer!");
+  check(
+    (n_blocks_reduction * n_threads_reduction) % n == 0,
+    "Step 1: The grid size must be a multiple of the line size!");
+  check(
+    n_threads_reduction * n_blocks_reduction <= n * n,
+    "Step 1: The grid size is bigger than the matrix size!");
+  // step 6
+  check(
+    n_threads_full * n_blocks_full <= n * n,
+    "Step 6: The grid size is bigger than the matrix size!");
+  check(
+    columns_per_block_step_4 * n == (1 << log2_data_block_size),
+    "Columns per block of step 4 is not a power of two!");
 
-  for (j = 0; j < m; j++) {
-    pi[j] = std::numeric_limits<DT>::max();
-    V[j] = j;
+  printf("Running. See out.txt for output.\n");
+
+  // Open text file
+  FILE *file = freopen("out.txt", "w", stdout);
+  if (file == NULL) {
+    perror("Error opening the output file!\n");
+    getchar();
+    exit(1);
+  };
+
+  // Prints the current time
+  time_t current_time;
+  time(&current_time);
+  printf("%s\n", ctime(&current_time));
+  fflush(file);
+
+  // Invoke kernels
+
+  time_t start_time = clock();
+
+  cudaDeviceSetLimit(cudaLimitPrintfFifoSize, 1024 * 1024 * 1024);
+
+  HungarianCPUContext ctx;
+
+  Hungarian_Algorithm(&ctx);
+  
+  time_t stop_time = clock();
+  fflush(file);
+
+  int total_cost = 0;
+  for (int r = 0; r < nrows; r++) {
+    int c = ctx.h_column_of_star_at_row[r];
+    if (c >= 0)
+      total_cost += ctx.h_cost[c][r];
   }
 
-  while (true) {
-    *SUptr = i;
-    *(++SUptr) = nrows;
+  printf("Total cost is \t %d \n", total_cost);
+  printf(
+    "Low resolution time is \t %f \n",
+    1000.0 * (double)(stop_time - start_time) / CLOCKS_PER_SEC);
 
-    // last column: null element epsilon, it is a sink of an alternating path
-    if ((rho[i] < m || rho[i] == ncols) && C[m * nrows + i] == u[i]) {
-      zi = i;
-      zj = m;
-      return;
-    }
-
-    for (vlvptr = vlvtop; vlvptr != vend; ++vlvptr) // U\LU
-    {
-      c = *vlvptr;
-      cred = C[c * nrows + i] - (u[i] + v[c]);
-      if (cred < pi[c]) {
-        pred[c] = i;
-        pi[c] = cred;
-        if (cred == 0) {
-          if (varrho[c] == nrows || varrho[c] == n) {
-            zi = nrows;
-            zj = c;
-            return;
-          }
-          j = *vlvtop;
-          *vlvtop = c;
-          *vlvptr = j;
-          ++vlvtop;
-        }
-      }
-    }
-
-    if (lvsvtop == vlvtop) // dual update
-    {
-      delta = std::numeric_limits<DT>::max();
-      lstcl = false;
-      for (vlvptr = vlvtop; vlvptr != vend; ++vlvptr) // V\LV
-        if (pi[*vlvptr] < delta)
-          delta = pi[*vlvptr];
-      for (suptr = SU; *suptr != nrows; ++suptr) // last column
-      {
-        cred = C[m * nrows + *suptr] - u[*suptr];
-        if (cred <= delta) {
-          delta = cred;
-          lstcl = true;
-          zi = *suptr;
-        }
-      }
-      for (suptr = SU; *suptr != nrows; ++suptr)
-        u[*suptr] += delta;
-      for (lvptr = V; lvptr != vlvtop; ++lvptr)
-        v[*lvptr] -= delta;
-      if (lstcl) {
-        zj = m;
-        return;
-      }
-      for (vlvptr = vlvtop; vlvptr != vend; ++vlvptr) // V\LV
-      {
-        pi[*vlvptr] -= delta;
-        if (pi[*vlvptr] == 0) {
-          if (varrho[*vlvptr] == nrows || varrho[*vlvptr] == n) {
-            zi = nrows;
-            zj = *vlvptr;
-            return;
-          }
-          c = *vlvtop;
-          *vlvtop = *vlvptr;
-          *vlvptr = c;
-          ++vlvtop;
-        }
-      }
-    } // end dual update
-    j = *lvsvtop;
-    ++lvsvtop; // j is now in SV
-    // if (varrho[j] == -1 || varrho[j] == n) { zi = -1; zj = j; break; }
-    i = varrho[j];
-  }
-}
-
-// -----------------------------------------------------------
-// Construct an alternating tree rooted in an element of V
-// and perform dual updates until an augmenting path is found
-// -----------------------------------------------------------
-template <class DT, typename IT>
-void augmentingPathColLSAPE_forb(
-  const IT &k, const DT *C, const IT &nrows, const IT &m, const IT *rho,
-  const IT *varrho, IT *U, IT *SV, IT *pred, DT *u, DT *v, DT *pi, IT &zi,
-  IT &zj) {
-  const IT n = nrows - 1, ncols = m + 1;
-  IT i = 0, j = k, r = 0, *SVptr = SV, *ulutop = U, *uluptr = NULL;
-  DT delta = 0, cred = 0;
-  const IT *svptr = NULL, *luptr = NULL, *uend = U + n, *lusutop = U;
-  bool lstrw = false;
-  //*SV = -1;
-  // zj = zi = -1;
-
-  for (i = 0; i < n; i++) {
-    pi[i] = std::numeric_limits<DT>::max();
-    U[i] = i;
-  }
-
-  while (true) {
-    *SVptr = j;
-    *(++SVptr) = ncols;
-
-    // last row: null element epsilon, it is a sink of an alternating path
-    if (varrho[j] < n && C[j * nrows + n] == v[j]) {
-      zi = n;
-      zj = j;
-      return;
-    }
-
-    for (uluptr = ulutop; uluptr != uend; ++uluptr) // U\LU
-    {
-      r = *uluptr;
-      if (C[j * nrows + r] < 0)
-        continue; // check constraints on C (forbidden assignments)
-      cred = C[j * nrows + r] - (u[r] + v[j]);
-      if (cred < pi[r]) {
-        pred[r] = j;
-        pi[r] = cred;
-        if (cred == 0) {
-          if (rho[r] == ncols || rho[r] == m) {
-            zi = r;
-            zj = ncols;
-            return;
-          }
-          i = *ulutop;
-          *ulutop = r;
-          *uluptr = i;
-          ++ulutop;
-        }
-      }
-    }
-
-    if (lusutop == ulutop) // dual update
-    {
-      delta = std::numeric_limits<DT>::max();
-      lstrw = false;
-      for (uluptr = ulutop; uluptr != uend; ++uluptr) // U\LU
-        if (pi[*uluptr] < delta)
-          delta = pi[*uluptr];
-      for (svptr = SV; *svptr != ncols; ++svptr) // last row
-      {
-        cred = C[*svptr * nrows + n] - v[*svptr];
-        if (cred <= delta) {
-          delta = cred;
-          lstrw = true;
-          zj = *svptr;
-        }
-      }
-      for (svptr = SV; *svptr != ncols; ++svptr)
-        v[*svptr] += delta;
-      for (luptr = U; luptr != ulutop; ++luptr)
-        u[*luptr] -= delta;
-      if (lstrw) {
-        zi = n;
-        return;
-      }
-      for (uluptr = ulutop; uluptr != uend; ++uluptr) // U\LU
-      {
-        pi[*uluptr] -= delta;
-        if (pi[*uluptr] == 0) {
-          if (rho[*uluptr] == ncols || rho[*uluptr] == m) {
-            zi = *uluptr;
-            zj = ncols;
-            return;
-          }
-          r = *ulutop;
-          *ulutop = *uluptr;
-          *uluptr = r;
-          ++ulutop;
-        }
-      }
-    } // end dual update
-    i = *lusutop;
-    ++lusutop; // i is now in SU
-    j = rho[i];
-  }
-}
-
-// -----------------------------------------------------------
-// Construct an alternating tree rooted in an element of U
-// and perform dual updates until an augmenting path is found
-// -----------------------------------------------------------
-template <class DT, typename IT>
-void augmentingPathRowLSAPE_forb(
-  const IT &k, const DT *C, const IT &nrows, const IT &m, const IT *rho,
-  const IT *varrho, IT *V, IT *SU, IT *pred, DT *u, DT *v, DT *pi, IT &zi,
-  IT &zj) {
-  const IT n = nrows - 1;
-  IT *suptr = NULL, *lvptr = NULL, *vend = V + m, *lvsvtop = V;
-  IT i = k, j = 0, c = 0, *SUptr = SU, *vlvtop = V, *vlvptr = NULL;
-  DT delta = 0, cred = 0;
-  bool lstcl = false;
-  //*SU = -1;
-  //    zj = zi = -1;
-
-  for (j = 0; j < m; j++) {
-    pi[j] = std::numeric_limits<DT>::max();
-    V[j] = j;
-  }
-
-  while (true) {
-    *SUptr = i;
-    *(++SUptr) = nrows;
-
-    // last column: null element epsilon, it is a sink of an alternating path
-    if (rho[i] < m && C[m * nrows + i] == u[i]) {
-      zi = i;
-      zj = m;
-      return;
-    }
-
-    for (vlvptr = vlvtop; vlvptr != vend; ++vlvptr) // U\LU
-    {
-      c = *vlvptr;
-      if (C[c * nrows + i] < 0)
-        continue; // check constraints on C (forbidden assignments)
-      cred = C[c * nrows + i] - (u[i] + v[c]);
-      if (cred < pi[c]) {
-        pred[c] = i;
-        pi[c] = cred;
-        if (cred == 0) {
-          if (varrho[c] == nrows || varrho[c] == n) {
-            zi = nrows;
-            zj = c;
-            return;
-          }
-          j = *vlvtop;
-          *vlvtop = c;
-          *vlvptr = j;
-          ++vlvtop;
-        }
-      }
-    }
-
-    if (lvsvtop == vlvtop) // dual update
-    {
-      delta = std::numeric_limits<DT>::max();
-      lstcl = false;
-      for (vlvptr = vlvtop; vlvptr != vend; ++vlvptr) // V\LV
-        if (pi[*vlvptr] < delta)
-          delta = pi[*vlvptr];
-      for (suptr = SU; *suptr != nrows; ++suptr) // last column
-      {
-        cred = C[m * nrows + *suptr] - u[*suptr];
-        if (cred <= delta) {
-          delta = cred;
-          lstcl = true;
-          zi = *suptr;
-        }
-      }
-      for (suptr = SU; *suptr != nrows; ++suptr)
-        u[*suptr] += delta;
-      for (lvptr = V; lvptr != vlvtop; ++lvptr)
-        v[*lvptr] -= delta;
-      if (lstcl) {
-        zj = m;
-        return;
-      }
-      for (vlvptr = vlvtop; vlvptr != vend; ++vlvptr) // V\LV
-      {
-        pi[*vlvptr] -= delta;
-        if (pi[*vlvptr] == 0) {
-          if (varrho[*vlvptr] == nrows || varrho[*vlvptr] == n) {
-            zi = nrows;
-            zj = *vlvptr;
-            return;
-          }
-          c = *vlvtop;
-          *vlvtop = *vlvptr;
-          *vlvptr = c;
-          ++vlvtop;
-        }
-      }
-    } // end dual update
-    j = *lvsvtop;
-    ++lvsvtop; // j is now in SV
-    i = varrho[j];
-  }
+  fclose(file);
 }
 
 // -----------------------------------------------------------
@@ -721,226 +1169,38 @@ void hungarianLSAPE(
   const DT *C, const IT &nrows, const IT &ncols, IT *rho, IT *varrho, DT *u,
   DT *v, unsigned short init_type, bool forb_assign) {
   const IT n = nrows - 1, m = ncols - 1;
-  IT nass = 0, mass = 0, i, j, r, c, k, *S = NULL, *U = NULL, *V = NULL,
-     *pred = NULL;
-  DT *pi = NULL;
-  u[n] = v[m] = 0;
 
-  if (init_type == 0) {
-    for (k = 0; k < n; k++) {
-      rho[k] = ncols;
-      u[k] = 0;
-    }
-    for (k = 0; k < m; k++) {
-      varrho[k] = nrows;
-      v[k] = 0;
+  HungarianCPUContext ctx{};
+  for (int i=0; i<n; i++) {
+    for (int j=0; j<m; j++) {
+      ctx.h_cost[i][j] = C[j*nrows+i];
     }
   }
-
-  if (forb_assign) {
-    // initialization -----------------------------------------------
-    if (init_type == 1)
-      basicPreprocLSAPE_forb<DT, IT>(
-        C, nrows, ncols, rho, varrho, u, v, nass, mass);
-
-    // augmentation of columns --------------------------------------
-    if (mass < m) {
-      U = new IT[nrows];
-      S = new IT[ncols];
-      pi = new DT[n];
-      pred = new IT[n];
-      for (k = 0; k < m; k++)
-        if (varrho[k] == nrows) {
-          augmentingPathColLSAPE_forb<DT, IT>(
-            k, C, nrows, m, rho, varrho, U, S, pred, u, v, pi, i,
-            j); // augment always finds an augmenting path
-          if (i == n) {
-            r = varrho[j];
-            varrho[j] = i;
-            i = r;
-          } else
-            j = ncols;
-          for (; j != k;) // update primal solution = new partial assignment
-          {
-            j = pred[i];
-            rho[i] = j;
-            r = varrho[j];
-            varrho[j] = i;
-            i = r;
-          }
-        }
-      delete[] U;
-      delete[] pred;
-      delete[] pi;
-      delete[] S;
-    }
-    // augmentation of rows --------------------------------------
-    if (nass < n) {
-      V = new IT[ncols];
-      S = new IT[nrows];
-      pi = new DT[m];
-      pred = new IT[m];
-      for (k = 0; k < n; k++)
-        if (rho[k] == ncols) {
-          augmentingPathRowLSAPE_forb<DT, IT>(
-            k, C, nrows, m, rho, varrho, V, S, pred, u, v, pi, i,
-            j); // augment always finds an augmenting path
-          if (j == m) {
-            c = rho[i];
-            rho[i] = j;
-            j = c;
-          } else
-            i = nrows;
-          for (; i != k;) // update primal solution = new partial assignment
-          {
-            i = pred[j];
-            varrho[j] = i;
-            c = rho[i];
-            rho[i] = j;
-            j = c;
-          }
-        }
-      delete[] V;
-      delete[] pred;
-      delete[] pi;
-      delete[] S;
-    }
-  } else {
-    // if (nrows < ncols)
-    //{
-    //  initialization -----------------------------------------------
-    if (init_type == 1)
-      basicPreprocColsLSAPE<DT, IT>(
-        C, nrows, ncols, rho, varrho, u, v, nass, mass);
-    // augmentation of columns --------------------------------------
-    if (mass < m) {
-      U = new IT[nrows];
-      S = new IT[ncols];
-      pi = new DT[n];
-      pred = new IT[n];
-      for (k = 0; k < m; k++)
-        if (varrho[k] == nrows) {
-          augmentingPathColLSAPE<DT, IT>(
-            k, C, nrows, m, rho, varrho, U, S, pred, u, v, pi, i,
-            j); // augment always finds an augmenting path
-          if (i == n) {
-            r = varrho[j];
-            varrho[j] = i;
-            i = r;
-          } else
-            j = ncols;
-          for (; j != k;) // update primal solution = new partial assignment
-          {
-            j = pred[i];
-            rho[i] = j;
-            r = varrho[j];
-            varrho[j] = i;
-            i = r;
-          }
-        }
-      delete[] U;
-      delete[] pred;
-      delete[] pi;
-      delete[] S;
-    }
-    // augmentation of rows --------------------------------------
-    if (nass < n) {
-      V = new IT[ncols];
-      S = new IT[nrows];
-      pi = new DT[m];
-      pred = new IT[m];
-      for (k = 0; k < n; k++)
-        if (rho[k] == ncols) {
-          augmentingPathRowLSAPE<DT, IT>(
-            k, C, nrows, m, rho, varrho, V, S, pred, u, v, pi, i,
-            j); // augment always finds an augmenting path
-          if (j == m) {
-            c = rho[i];
-            rho[i] = j;
-            j = c;
-          } else
-            i = nrows;
-          for (; i != k;) // update primal solution = new partial assignment
-          {
-            i = pred[j];
-            varrho[j] = i;
-            c = rho[i];
-            rho[i] = j;
-            j = c;
-          }
-        }
-      delete[] V;
-      delete[] pred;
-      delete[] pi;
-      delete[] S;
-    }
-    //}
-    // else
-    // {
-    //   // augmentation of rows --------------------------------------
-    //   if (nass < n)
-    //   {
-    // 	V = new IT[ncols]; S = new IT[nrows];  pi = new DT[m]; pred = new IT[m];
-    // 	for (k = 0; k < n; k++)
-    // 	  if (rho[k] == -1)
-    // 	  {
-    // 	    augmentingPathRowLSAPE<DT,IT>(k,C,nrows,m,rho,varrho,V,S,pred,u,v,pi,i,j);
-    // // augment always finds an augmenting path 	    if (j == m) { c =
-    // rho[i];
-    // rho[i] = j; j = c; } 	    else i = -1; 	    for (; i != k;)  // update
-    // primal solution = new partial assignment
-    // 	    {
-    // 	      i = pred[j]; varrho[j] = i;
-    // 	      c = rho[i]; rho[i] = j; j = c;
-    // 	    }
-    // 	  }
-    // 	delete[] V; delete[] pred; delete[] pi; delete[] S;
-    //   }
-    //   // augmentation of columns --------------------------------------
-    //   if (mass < m)
-    //   {
-
-    // 	U = new IT[nrows]; S = new IT[ncols];  pi = new DT[n]; pred = new IT[n];
-    // 	for (k = 0; k < m; k++)
-    // 	  if (varrho[k] == -1)
-    // 	  {
-    // 	    //	  std::cerr << "yo\n";
-    // 	    augmentingPathColLSAPE<DT,IT>(k,C,nrows,m,rho,varrho,U,S,pred,u,v,pi,i,j);
-    // // augment always finds an augmenting path 	    if (i == n) { r =
-    // varrho[j]; varrho[j] = i; i = r; } 	    else j = -1; 	    for
-    // (; j != k;)  // update primal solution = new partial assignment
-    // 	    {
-    // 	      j = pred[i]; rho[i] = j;
-    // 	      r = varrho[j]; varrho[j] = i; i = r;
-    // 	    }
-    // 	  }
-    // 	delete[] U; delete[] pred; delete[] pi; delete[] S;
-    //   }
-    // }
+  for (int i=0; i<n; i++) {
+    for (int j=n; j<1024; j++)
+      if (j-n == i) {
+        ctx.h_cost[i][j] = C[n*nrows+i];
+      } else {
+        ctx.h_cost[i][j] = MAX_DATA;
+      }
   }
-}
+  for (int i=0; i<m; i++) {
+    for (int j=n; j<1024; j++)
+      if (j-n == i) {
+        ctx.h_cost[j][i] = C[i*nrows+m];
+      } else {
+        ctx.h_cost[j][i] = MAX_DATA;
+      }
+  }
+  Hungarian_Algorithm(&ctx);
 
-// -----------------------------------------------------------
-// Reconstruct the list of insertions epsilon->V
-// return false if no insertion is found
-// -----------------------------------------------------------
-template <typename IT>
-IT reconstructInsertions(
-  const IT *varrho, const IT &n, const IT &m, IT **rhoeps) {
-  IT nb = 0;
-  for (IT j = 0; j < m; j++)
-    if (varrho[j] == n)
-      nb++;
-  if (nb > 0)
-    *rhoeps = new IT[nb];
-  else
-    return nb;
-  for (IT j = 0, k = 0; j < m; j++)
-    if (varrho[j] == n) {
-      (*rhoeps)[k] = j;
-      k++;
-    }
-  return nb;
+  for (int i=0; i<n; i++) {
+    rho[i] = ctx.h_column_of_star_at_row[i];
+  }
+
+  for (int i=0; i<m; i++) {
+    varrho[i] = ctx.h_row_of_star_at_column[i];
+  }
 }
 
 #define DEFINE_TMPL(DT, IT)                                                    \
@@ -948,7 +1208,6 @@ IT reconstructInsertions(
     const DT *C, const IT &nrows, const IT &ncols, IT *rho, IT *varrho, DT *u, \
     DT *v, unsigned short init_type, bool forb_assign)
 
-DEFINE_TMPL(int, int);
 DEFINE_TMPL(double, int);
 
 } // namespace liblsap

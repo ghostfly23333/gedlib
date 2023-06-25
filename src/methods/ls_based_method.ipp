@@ -113,6 +113,9 @@ ged_run_(const GEDGraph & g, const GEDGraph & h, Result & result) {
 			}
 			generate_node_maps_from_counts_matrix_(g,h,counts_matrix, visited_node_maps, initial_node_maps);
 		}
+		// TODO: single thread
+		while (initial_node_maps.size() > 1)
+			initial_node_maps.pop_back();
 		double former_upper_bound = upper_bound;
 		std::size_t terminated_runs{0};
 		std::vector<bool> is_converged_node_map(initial_node_maps.size(), false);
