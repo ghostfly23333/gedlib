@@ -26,6 +26,8 @@ set(VERSION 1.0)
 
 option(CUDA_LSAPE "Use cuda lsape kernel to replace hungarian-lsape.h" OFF)
 
+set(CMAKE_CXX_STANDARD 17)
+
 # Determine build type.
 
 if(NOT CMAKE_BUILD_TYPE)
@@ -95,6 +97,7 @@ if(CUDA_LSAPE)
   add_compile_definitions(CUDA_LSAPE=1)
   add_library(cuda_lsape src/util/hungarian_lsape.cu)
   set_target_properties(cuda_lsape PROPERTIES CUDA_ARCHITECTURES "50;72;86")
+  target_compile_options(cuda_lsape PUBLIC "$<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda>")
 else()
   add_compile_definitions(CUDA_LSAPE=0)
 endif()

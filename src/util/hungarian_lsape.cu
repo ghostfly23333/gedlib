@@ -206,6 +206,19 @@ struct HungarianCPUContext {
   bool h_goto_5;
 };
 
+struct HungarianManagedContext {
+  int zeros_size;     // The number fo zeros
+  int n_matches;      // Used in step 3 to count the number of matches found
+  bool goto_5;        // After step 4, goto step 5?
+  bool repeat_kernel; // Needs to repeat the step 2 and step 4 kernel?
+#if defined(DEBUG) || defined(_DEBUG)
+  int n_covered_rows;    // Used in debug mode to check for the
+                         // number of covered rows
+  int n_covered_columns; // Used in debug mode to check for
+                         // the number of covered columns
+#endif
+};
+
 // Device Variables
 struct HungarianGPUContext {
   data slack[nrows * ncols];         // The slack matrix
@@ -240,16 +253,7 @@ struct HungarianGPUContext {
                                               // first reduction kernel
   data d_min_in_mat; // Used in step 6 to store the minimum
 
-  int zeros_size;     // The number fo zeros
-  int n_matches;      // Used in step 3 to count the number of matches found
-  bool goto_5;        // After step 4, goto step 5?
-  bool repeat_kernel; // Needs to repeat the step 2 and step 4 kernel?
-#if defined(DEBUG) || defined(_DEBUG)
-  int n_covered_rows;    // Used in debug mode to check for the
-                         // number of covered rows
-  int n_covered_columns; // Used in debug mode to check for
-                         // the number of covered columns
-#endif
+  HungarianManagedContext *managed;
 };
 __shared__ extern data sdata[]; // For access to shared memory
 
@@ -453,7 +457,7 @@ __global__ void step_1_col_sub(HungarianGPUContext *ctx) {
     ctx->min_in_cols[c]; // subtract the minimum in row from that row
 
   if (i == 0)
-    ctx->zeros_size = 0;
+    ctx->managed->zeros_size = 0;
   if (i < n_blocks_step_4)
     ctx->zeros_size_b[i] = 0;
 }
@@ -463,7 +467,7 @@ __global__ void compress_matrix(HungarianGPUContext *ctx) {
   int i = blockDim.x * blockIdx.x + threadIdx.x;
 
   if (ctx->slack[i] == 0) {
-    atomicAdd(&ctx->zeros_size, 1);
+    atomicAdd(&ctx->managed->zeros_size, 1);
     int b = i >> log2_data_block_size;
     int i0 = i & ~(data_block_size - 1); // == b << log2_data_block_size
     int j = atomicAdd(ctx->zeros_size_b + b, 1);
@@ -517,7 +521,7 @@ __global__ void step_2(HungarianGPUContext *ctx) {
   } while (repeat);
 
   if (s_repeat_kernel)
-    ctx->repeat_kernel = true;
+    ctx->managed->repeat_kernel = true;
 }
 
 // STEP 3
@@ -527,7 +531,7 @@ __global__ void step_3ini(HungarianGPUContext *ctx) {
   ctx->cover_row[i] = 0;
   ctx->cover_column[i] = 0;
   if (i == 0)
-    ctx->n_matches = 0;
+    ctx->managed->n_matches = 0;
 }
 
 // Cover each column with a starred zero. If all the columns are
@@ -536,7 +540,7 @@ __global__ void step_3(HungarianGPUContext *ctx) {
   int i = blockDim.x * blockIdx.x + threadIdx.x;
   if (ctx->row_of_star_at_column[i] >= 0) {
     ctx->cover_column[i] = 1;
-    atomicAdd((int *)&ctx->n_matches, 1);
+    atomicAdd((int *)&ctx->managed->n_matches, 1);
   }
 }
 
@@ -604,9 +608,9 @@ __global__ void step_4(HungarianGPUContext *ctx) {
   } while (s_found && !s_goto_5);
 
   if (i == 0 && s_repeat_kernel)
-    ctx->repeat_kernel = true;
+    ctx->managed->repeat_kernel = true;
   if (i == 0 && s_goto_5)
-    ctx->goto_5 = true;
+    ctx->managed->goto_5 = true;
 }
 
 /* STEP 5:
@@ -802,7 +806,7 @@ __global__ void step_6_add_sub(HungarianGPUContext *ctx) {
     ctx->slack[i] -= ctx->d_min_in_mat;
 
   if (i == 0)
-    ctx->zeros_size = 0;
+    ctx->managed->zeros_size = 0;
   if (i < n_blocks_step_4)
     ctx->zeros_size_b[i] = 0;
 }
@@ -889,11 +893,17 @@ void Hungarian_Algorithm(HungarianCPUContext *cpu_ctx, cudaStream_t stream) {
 #endif
 
   HungarianGPUContext *gpu_ctx;
-  checkCuda(cudaMallocManaged(&gpu_ctx, sizeof(HungarianGPUContext)));
+  HungarianManagedContext *managed_ctx;
+  checkCuda(cudaMalloc(&gpu_ctx, sizeof(HungarianGPUContext)));
+  checkCuda(cudaMallocManaged(&managed_ctx, sizeof(HungarianManagedContext)));
 
-  checkCuda(cudaStreamAttachMemAsync(stream, gpu_ctx, 0, cudaMemAttachSingle));
-
+  checkCuda(
+    cudaStreamAttachMemAsync(stream, managed_ctx, 0, cudaMemAttachSingle));
   checkCuda(cudaStreamSynchronize(stream));
+
+  cudaMemcpyAsync(
+    &gpu_ctx->managed, &managed_ctx, sizeof(managed_ctx),
+    cudaMemcpyKind::cudaMemcpyHostToDevice, stream);
 
   // Copy vectors from host memory to device memory
   cudaMemcpyAsync(
@@ -938,22 +948,22 @@ void Hungarian_Algorithm(HungarianCPUContext *cpu_ctx, cudaStream_t stream) {
 
   // compress_matrix
   call_kernel(compress_matrix, n_blocks_full, n_threads_full, gpu_ctx);
-  // printf("before step2!\n");
   // Step 2 kernels
   do {
-    gpu_ctx->repeat_kernel = false;
+    managed_ctx->repeat_kernel = false;
     dh_checkCuda(cudaStreamSynchronize(stream));
     // printf("before step2 kernel call!\n");
     call_kernel(
       step_2, n_blocks_step_4,
-      (n_blocks_step_4 > 1 || gpu_ctx->zeros_size > max_threads_per_block)
+      (n_blocks_step_4 > 1 ||
+       managed_ctx->zeros_size > max_threads_per_block)
         ? max_threads_per_block
-        : gpu_ctx->zeros_size,
+        : managed_ctx->zeros_size,
       gpu_ctx);
     // printf("after step2 kernel call!\n");
     // If we have more than one block it means that we have 512 lines per block
     // so 1024 threads should be adequate.
-  } while (gpu_ctx->repeat_kernel);
+  } while (managed_ctx->repeat_kernel);
   // printf("before step3!\n");
   while (1) { // repeat steps 3 to 6
 
@@ -961,7 +971,7 @@ void Hungarian_Algorithm(HungarianCPUContext *cpu_ctx, cudaStream_t stream) {
     call_kernel(step_3ini, n_blocks, n_threads, gpu_ctx);
     call_kernel(step_3, n_blocks, n_threads, gpu_ctx);
 
-    if (gpu_ctx->n_matches >= ncols)
+    if (managed_ctx->n_matches >= ncols)
       break; // It's done
 
     // step 4_kernels
@@ -986,22 +996,23 @@ void Hungarian_Algorithm(HungarianCPUContext *cpu_ctx, cudaStream_t stream) {
       last_n_covered_rows = n_covered_rows;
 #endif
       do { // step 4 loop
-        gpu_ctx->goto_5 = false;
-        gpu_ctx->repeat_kernel = false;
+        managed_ctx->goto_5 = false;
+        managed_ctx->repeat_kernel = false;
         dh_checkCuda(cudaStreamSynchronize(stream));
 
         call_kernel(
           step_4, n_blocks_step_4,
-          (n_blocks_step_4 > 1 || gpu_ctx->zeros_size > max_threads_per_block)
+          (n_blocks_step_4 > 1 ||
+           managed_ctx->zeros_size > max_threads_per_block)
             ? max_threads_per_block
-            : gpu_ctx->zeros_size,
+            : managed_ctx->zeros_size,
           gpu_ctx);
         // If we have more than one block it means that we have 512 lines per
         // block so 1024 threads should be adequate.
 
-      } while (gpu_ctx->repeat_kernel && !gpu_ctx->goto_5);
+      } while (managed_ctx->repeat_kernel && !managed_ctx->goto_5);
 
-      if (gpu_ctx->goto_5)
+      if (managed_ctx->goto_5)
         break;
 
       // step 6_kernel
@@ -1108,9 +1119,7 @@ void hungarianLSAPE(
   cudaStream_t stream;
   checkCuda(cudaStreamCreate(&stream));
 
-  // printf("step1\n");
   Hungarian_Algorithm(&ctx, stream);
-  // printf("step2\n");
 
   checkCuda(cudaStreamDestroy(stream));
 
