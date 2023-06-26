@@ -868,8 +868,8 @@ inline double get_timer_period(void) {
 #define call_kernel_s(k, n_blocks, n_threads, shared, ctx)                     \
   {                                                                            \
     timer_start = dh_get_globaltime();                                         \
-    k<<<n_blocks, n_threads, shared, stream>>>(ctx);                                   \
-    dh_checkCuda(cudaStreamSynchronize(stream));                                     \
+    k<<<n_blocks, n_threads, shared, stream>>>(ctx);                           \
+    dh_checkCuda(cudaStreamSynchronize(stream));                               \
     timer_stop = dh_get_globaltime();                                          \
     k##_time += timer_stop - timer_start;                                      \
     k##_runs++;                                                                \
@@ -891,14 +891,19 @@ void Hungarian_Algorithm(HungarianCPUContext *cpu_ctx, cudaStream_t stream) {
   HungarianGPUContext *gpu_ctx;
   checkCuda(cudaMallocManaged(&gpu_ctx, sizeof(HungarianGPUContext)));
 
+  checkCuda(cudaStreamAttachMemAsync(stream, gpu_ctx, 0, cudaMemAttachSingle));
+
+  checkCuda(cudaStreamSynchronize(stream));
+
   // Copy vectors from host memory to device memory
   cudaMemcpyAsync(
     gpu_ctx->slack, cpu_ctx->h_cost, sizeof(data) * nrows * ncols,
-    cudaMemcpyKind::cudaMemcpyHostToDevice, stream); // symbol refers to the device
-                                                     // memory hence "To" means from
-                                                     // Host to Device
+    cudaMemcpyKind::cudaMemcpyHostToDevice,
+    stream); // symbol refers to the device
+             // memory hence "To" means from
+             // Host to Device
   checkCuda(cudaStreamSynchronize(stream));
-  printf("pass memcpy!\n");
+  // printf("pass memcpy!\n");
 
   declare_kernel(init);
   declare_kernel(calc_min_in_rows);
@@ -917,7 +922,7 @@ void Hungarian_Algorithm(HungarianCPUContext *cpu_ctx, cudaStream_t stream) {
   declare_kernel(step_5a);
   declare_kernel(step_5b);
   declare_kernel(step_5c);
-  printf("before declare!\n");
+  // printf("before declare!\n");
   total_time_start = dh_get_globaltime();
 
   // Initialization
@@ -933,23 +938,23 @@ void Hungarian_Algorithm(HungarianCPUContext *cpu_ctx, cudaStream_t stream) {
 
   // compress_matrix
   call_kernel(compress_matrix, n_blocks_full, n_threads_full, gpu_ctx);
-  printf("before step2!\n");
+  // printf("before step2!\n");
   // Step 2 kernels
   do {
     gpu_ctx->repeat_kernel = false;
     dh_checkCuda(cudaStreamSynchronize(stream));
-    printf("before step2 kernel call!\n");
+    // printf("before step2 kernel call!\n");
     call_kernel(
       step_2, n_blocks_step_4,
       (n_blocks_step_4 > 1 || gpu_ctx->zeros_size > max_threads_per_block)
         ? max_threads_per_block
         : gpu_ctx->zeros_size,
       gpu_ctx);
-    printf("after step2 kernel call!\n");
+    // printf("after step2 kernel call!\n");
     // If we have more than one block it means that we have 512 lines per block
     // so 1024 threads should be adequate.
   } while (gpu_ctx->repeat_kernel);
-  printf("before step3!\n");
+  // printf("before step3!\n");
   while (1) { // repeat steps 3 to 6
 
     // Step 3 kernels
@@ -1019,7 +1024,7 @@ void Hungarian_Algorithm(HungarianCPUContext *cpu_ctx, cudaStream_t stream) {
   } // repeat steps 3 to 6
 
   checkCuda(cudaStreamSynchronize(stream));
-  printf("ready to copy back!\n");
+  // printf("ready to copy back!\n");
   // Copy assignments from Device to Host and calculate the total Cost
   cudaMemcpyAsync(
     cpu_ctx->h_column_of_star_at_row, gpu_ctx->column_of_star_at_row,
@@ -1028,7 +1033,7 @@ void Hungarian_Algorithm(HungarianCPUContext *cpu_ctx, cudaStream_t stream) {
     cpu_ctx->h_row_of_star_at_column, gpu_ctx->row_of_star_at_column,
     ncols * sizeof(int), cudaMemcpyKind::cudaMemcpyDeviceToHost, stream);
   checkCuda(cudaStreamSynchronize(stream));
-  printf("ready to free!\n");
+  // printf("ready to free!\n");
   cudaFree(gpu_ctx);
 }
 
@@ -1075,7 +1080,7 @@ template <class DT, typename IT>
 void hungarianLSAPE(
   const DT *C, const IT &nrows, const IT &ncols, IT *rho, IT *varrho, DT *u,
   DT *v, unsigned short init_type, bool forb_assign) {
-  printf("successful enter hungarianLSAPE\n");
+  // printf("successful enter hungarianLSAPE\n");
   const IT n = nrows - 1, m = ncols - 1;
 
   HungarianCPUContext ctx{};
@@ -1103,9 +1108,11 @@ void hungarianLSAPE(
   cudaStream_t stream;
   checkCuda(cudaStreamCreate(&stream));
 
-  printf("step1\n");
+  // printf("step1\n");
   Hungarian_Algorithm(&ctx, stream);
-  printf("step2\n");
+  // printf("step2\n");
+
+  checkCuda(cudaStreamDestroy(stream));
 
   for (int i = 0; i < n; i++) {
     rho[i] = std::min(ctx.h_column_of_star_at_row[i], m);
