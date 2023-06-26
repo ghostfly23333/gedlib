@@ -87,8 +87,8 @@ ged_run_(const GEDGraph & g, const GEDGraph & h, Result & result) {
 	double skewdness_counts_matrix{1.0};
 	generate_initial_node_maps_(g, h, initial_node_maps, result);
 	// TODO: single thread
-	while (initial_node_maps.size() > 1)
-		initial_node_maps.pop_back();
+	//while (initial_node_maps.size() > 1)
+	//	initial_node_maps.pop_back();
 	for (std::size_t node_map_id = 0; node_map_id < initial_node_maps.size(); node_map_id++) {
 		result_node_maps.emplace_back(g.num_nodes(), h.num_nodes());
 		visited_node_maps.emplace_back(initial_node_maps.at(node_map_id));
@@ -125,9 +125,11 @@ ged_run_(const GEDGraph & g, const GEDGraph & h, Result & result) {
 #endif
 		for (std::size_t node_map_id = 0; node_map_id < initial_node_maps.size(); node_map_id++) {
 			if (not found_optimum and (terminated_runs < num_runs_from_initial_solutions)) {
+				printf("launching run %lu\n", node_map_id);
 				ls_run_from_initial_solution_(g, h, result.lower_bound(), initial_node_maps.at(node_map_id), result_node_maps.at(node_map_id));
 #pragma omp critical
 				{
+					printf("run %lu terminated\n", node_map_id);
 					is_converged_node_map[node_map_id] = true;
 					upper_bound = std::min(upper_bound, result_node_maps.at(node_map_id).induced_cost());
 					found_optimum = (found_optimum or (result.lower_bound() >= upper_bound));
