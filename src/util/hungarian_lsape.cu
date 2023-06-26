@@ -115,7 +115,7 @@ const int n_tests = 100;
 #else
 // User inputs: These values should be changed by the user
 const int user_n =
-  1000; // This is the size of the cost matrix as supplied by the user
+  8; // This is the size of the cost matrix as supplied by the user
 const int n =
   1 << (klog2(user_n) + 1); // The size of the cost/pay matrix used in the
                             // algorithm that is increased to a power of two
@@ -195,7 +195,8 @@ struct HungarianCPUContext {
 #ifndef USE_TEST_MATRIX
   data h_cost[ncols][nrows];
 #else
-  data h_cost[n][n] = {{1, 2, 3, 4}, {2, 4, 6, 8}, {3, 6, 9, 12}, {4, 8, 12, 16}};
+  data h_cost[n][n] = {
+    {1, 2, 3, 4}, {2, 4, 6, 8}, {3, 6, 9, 12}, {4, 8, 12, 16}};
 #endif
   int h_column_of_star_at_row[nrows];
   int h_row_of_star_at_column[ncols];
@@ -207,56 +208,48 @@ struct HungarianCPUContext {
 
 // Device Variables
 struct HungarianGPUContext {
-  data slack[nrows * ncols]; // The slack matrix
-  data min_in_rows[nrows];   // Minimum in rows
-  data min_in_cols[ncols];   // Minimum in columns
-  int zeros[nrows * ncols];  // A vector with the position of the
-                                        // zeros in the slack matrix
-  int
-    zeros_size_b[n_blocks_step_4]; // The number of zeros in block i
+  data slack[nrows * ncols];         // The slack matrix
+  data min_in_rows[nrows];           // Minimum in rows
+  data min_in_cols[ncols];           // Minimum in columns
+  int zeros[nrows * ncols];          // A vector with the position of the
+                                     // zeros in the slack matrix
+  int zeros_size_b[n_blocks_step_4]; // The number of zeros in block i
 
   int row_of_star_at_column[ncols]; // A vector that given the column
-                                               // j gives the row of the star at
-                                               // that column (or -1, no star)
+                                    // j gives the row of the star at
+                                    // that column (or -1, no star)
   int column_of_star_at_row[nrows]; // A vector that given the row i
-                                               // gives the column of the star
-                                               // at that row (or -1, no star)
-  int cover_row[nrows]; // A vector that given the row i indicates if
-                                   // it is covered (1- covered, 0- uncovered)
-  int
-    cover_column[ncols]; // A vector that given the column j indicates if it is
-                         // covered (1- covered, 0- uncovered)
-  int
-    column_of_prime_at_row[nrows]; // A vector that given the row i
-                                   // gives the column of the prime
-                                   // at that row  (or -1, no prime)
+                                    // gives the column of the star
+                                    // at that row (or -1, no star)
+  int cover_row[nrows];    // A vector that given the row i indicates if
+                           // it is covered (1- covered, 0- uncovered)
+  int cover_column[ncols]; // A vector that given the column j indicates if it
+                           // is covered (1- covered, 0- uncovered)
+  int column_of_prime_at_row[nrows]; // A vector that given the row i
+                                     // gives the column of the prime
+                                     // at that row  (or -1, no prime)
   int row_of_green_at_column[ncols]; // A vector that given the row j
-                                                // gives the column of the green
-                                                // at that row (or -1, no green)
+                                     // gives the column of the green
+                                     // at that row (or -1, no green)
 
-  data
-    max_in_mat_row[nrows]; // Used in step 1 to stores the maximum in rows
+  data max_in_mat_row[nrows]; // Used in step 1 to stores the maximum in rows
   data
     min_in_mat_col[ncols]; // Used in step 1 to stores the minimums in columns
-  data
-    d_min_in_mat_vect[n_blocks_reduction]; // Used in step 6 to stores the
-                                           // intermediate results from the
-                                           // first reduction kernel
+  data d_min_in_mat_vect[n_blocks_reduction]; // Used in step 6 to stores the
+                                              // intermediate results from the
+                                              // first reduction kernel
   data d_min_in_mat; // Used in step 6 to store the minimum
 
-  int zeros_size; // The number fo zeros
-  int
-    n_matches; // Used in step 3 to count the number of matches found
-  bool goto_5; // After step 4, goto step 5?
-  bool
-    repeat_kernel; // Needs to repeat the step 2 and step 4 kernel?
+  int zeros_size;     // The number fo zeros
+  int n_matches;      // Used in step 3 to count the number of matches found
+  bool goto_5;        // After step 4, goto step 5?
+  bool repeat_kernel; // Needs to repeat the step 2 and step 4 kernel?
 #if defined(DEBUG) || defined(_DEBUG)
-  int n_covered_rows; // Used in debug mode to check for the
-                                         // number of covered rows
+  int n_covered_rows;    // Used in debug mode to check for the
+                         // number of covered rows
   int n_covered_columns; // Used in debug mode to check for
-                                            // the number of covered columns
+                         // the number of covered columns
 #endif
-
 };
 __shared__ extern data sdata[]; // For access to shared memory
 
@@ -693,8 +686,9 @@ __device__ void min_warp_reduce(volatile data *sdata, int tid) {
 }
 
 template <unsigned int blockSize> // blockSize is the size of a block of threads
-__device__ void
-min_reduce1(HungarianGPUContext *gpu_ctx, volatile data *g_idata, volatile data *g_odata, unsigned int n) {
+__device__ void min_reduce1(
+  HungarianGPUContext *gpu_ctx, volatile data *g_idata, volatile data *g_odata,
+  unsigned int n) {
   unsigned int tid = threadIdx.x;
   unsigned int i = blockIdx.x * (blockSize * 2) + tid;
   unsigned int gridSize = blockSize * 2 * gridDim.x;
@@ -753,8 +747,9 @@ min_reduce1(HungarianGPUContext *gpu_ctx, volatile data *g_idata, volatile data 
 }
 
 template <unsigned int blockSize>
-__device__ void
-min_reduce2(HungarianGPUContext *gpu_ctx, volatile data *g_idata, volatile data *g_odata, unsigned int n) {
+__device__ void min_reduce2(
+  HungarianGPUContext *gpu_ctx, volatile data *g_idata, volatile data *g_odata,
+  unsigned int n) {
   unsigned int tid = threadIdx.x;
   unsigned int i = blockIdx.x * (blockSize * 2) + tid;
 
@@ -813,11 +808,13 @@ __global__ void step_6_add_sub(HungarianGPUContext *ctx) {
 }
 
 __global__ void min_reduce_kernel1(HungarianGPUContext *ctx) {
-  min_reduce1<n_threads_reduction>(ctx, ctx->slack, ctx->d_min_in_mat_vect, nrows * ncols);
+  min_reduce1<n_threads_reduction>(
+    ctx, ctx->slack, ctx->d_min_in_mat_vect, nrows * ncols);
 }
 
 __global__ void min_reduce_kernel2(HungarianGPUContext *ctx) {
-  min_reduce2<n_threads_reduction / 2>(ctx, ctx->d_min_in_mat_vect, &ctx->d_min_in_mat, n_blocks_reduction);
+  min_reduce2<n_threads_reduction / 2>(
+    ctx, ctx->d_min_in_mat_vect, &ctx->d_min_in_mat, n_blocks_reduction);
 }
 
 __device__ inline long long int d_get_globaltime(void) {
@@ -884,8 +881,7 @@ inline double get_timer_period(void) {
   printf(#k "\t %g \t %d\n", dh_get_timer_period() * k##_time, k##_runs)
 
 // Hungarian_Algorithm
-void Hungarian_Algorithm(HungarianCPUContext *cpu_ctx)
-{
+void Hungarian_Algorithm(HungarianCPUContext *cpu_ctx) {
   hr_clock_rep timer_start, timer_stop;
   hr_clock_rep total_time_start, total_time_stop;
 #if defined(DEBUG) || defined(_DEBUG)
@@ -893,13 +889,14 @@ void Hungarian_Algorithm(HungarianCPUContext *cpu_ctx)
 #endif
 
   HungarianGPUContext *gpu_ctx;
-  checkCuda(cudaMalloc(&gpu_ctx, sizeof(HungarianGPUContext)));
+  checkCuda(cudaMallocManaged(&gpu_ctx, sizeof(HungarianGPUContext)));
 
   // Copy vectors from host memory to device memory
-    cudaMemcpyToSymbol(
-      gpu_ctx->slack, cpu_ctx->h_cost,
-      sizeof(data) * nrows * ncols); // symbol refers to the device memory hence
-                                     // "To" means from Host to Device
+  cudaMemcpy(
+    gpu_ctx->slack, cpu_ctx->h_cost, sizeof(data) * nrows * ncols,
+    cudaMemcpyKind::cudaMemcpyHostToDevice); // symbol refers to the device
+                                             // memory hence "To" means from
+                                             // Host to Device
 
   declare_kernel(init);
   declare_kernel(calc_min_in_rows);
@@ -925,9 +922,11 @@ void Hungarian_Algorithm(HungarianCPUContext *cpu_ctx)
   call_kernel(init, n_blocks, n_threads, gpu_ctx);
 
   // Step 1 kernels
-  call_kernel(calc_min_in_rows, n_blocks_reduction, n_threads_reduction, gpu_ctx);
+  call_kernel(
+    calc_min_in_rows, n_blocks_reduction, n_threads_reduction, gpu_ctx);
   call_kernel(step_1_row_sub, n_blocks_full, n_threads_full, gpu_ctx);
-  call_kernel(calc_min_in_cols, n_blocks_reduction, n_threads_reduction, gpu_ctx);
+  call_kernel(
+    calc_min_in_cols, n_blocks_reduction, n_threads_reduction, gpu_ctx);
   call_kernel(step_1_col_sub, n_blocks_full, n_threads_full, gpu_ctx);
 
   // compress_matrix
@@ -941,7 +940,8 @@ void Hungarian_Algorithm(HungarianCPUContext *cpu_ctx)
       step_2, n_blocks_step_4,
       (n_blocks_step_4 > 1 || gpu_ctx->zeros_size > max_threads_per_block)
         ? max_threads_per_block
-        : gpu_ctx->zeros_size, gpu_ctx);
+        : gpu_ctx->zeros_size,
+      gpu_ctx);
     // If we have more than one block it means that we have 512 lines per block
     // so 1024 threads should be adequate.
   } while (gpu_ctx->repeat_kernel);
@@ -984,7 +984,8 @@ void Hungarian_Algorithm(HungarianCPUContext *cpu_ctx)
           step_4, n_blocks_step_4,
           (n_blocks_step_4 > 1 || gpu_ctx->zeros_size > max_threads_per_block)
             ? max_threads_per_block
-            : gpu_ctx->zeros_size, gpu_ctx);
+            : gpu_ctx->zeros_size,
+          gpu_ctx);
         // If we have more than one block it means that we have 512 lines per
         // block so 1024 threads should be adequate.
 
@@ -1012,117 +1013,17 @@ void Hungarian_Algorithm(HungarianCPUContext *cpu_ctx)
 
   } // repeat steps 3 to 6
 
-  total_time_stop = dh_get_globaltime();
-
-  printf("kernel \t time (ms) \t runs\n");
-
-  kernel_stats(init);
-  kernel_stats(calc_min_in_rows);
-  kernel_stats(step_1_row_sub);
-  kernel_stats(calc_min_in_cols);
-  kernel_stats(step_1_col_sub);
-  kernel_stats(compress_matrix);
-  kernel_stats(step_2);
-  kernel_stats(step_3ini);
-  kernel_stats(step_3);
-  kernel_stats(step_4_init);
-  kernel_stats(step_4);
-  kernel_stats(min_reduce_kernel1);
-  kernel_stats(min_reduce_kernel2);
-  kernel_stats(step_6_add_sub);
-  kernel_stats(step_5a);
-  kernel_stats(step_5b);
-  kernel_stats(step_5c);
-
-  printf(
-    "Total time(ms) \t %g\n",
-    dh_get_timer_period() * (total_time_stop - total_time_start));
-
-
   checkCuda(cudaDeviceSynchronize());
 
   // Copy assignments from Device to Host and calculate the total Cost
-  cudaMemcpyFromSymbol(
-    cpu_ctx->h_column_of_star_at_row, gpu_ctx->column_of_star_at_row, nrows * sizeof(int));
-  cudaMemcpyFromSymbol(
-    cpu_ctx->h_row_of_star_at_column, gpu_ctx->row_of_star_at_column, ncols * sizeof(int));
-}
+  cudaMemcpy(
+    cpu_ctx->h_column_of_star_at_row, gpu_ctx->column_of_star_at_row,
+    nrows * sizeof(int), cudaMemcpyKind::cudaMemcpyDeviceToHost);
+  cudaMemcpy(
+    cpu_ctx->h_row_of_star_at_column, gpu_ctx->row_of_star_at_column,
+    ncols * sizeof(int), cudaMemcpyKind::cudaMemcpyDeviceToHost);
 
-// Used to make sure some constants are properly set
-void check(bool val, const char *str) {
-  if (!val) {
-    printf("Check failed: %s!\n", str);
-    getchar();
-    exit(-1);
-  }
-}
-
-int main() {
-  // Constant checks:
-  check(n == (1 << log2_n), "Incorrect log2_n!");
-  check(n_threads * n_blocks == n, "n_threads*n_blocks != n\n");
-  // step 1
-  check(
-    n_blocks_reduction <= n, "Step 1: Should have several lines per block!");
-  check(
-    n % n_blocks_reduction == 0,
-    "Step 1: Number of lines per block should be integer!");
-  check(
-    (n_blocks_reduction * n_threads_reduction) % n == 0,
-    "Step 1: The grid size must be a multiple of the line size!");
-  check(
-    n_threads_reduction * n_blocks_reduction <= n * n,
-    "Step 1: The grid size is bigger than the matrix size!");
-  // step 6
-  check(
-    n_threads_full * n_blocks_full <= n * n,
-    "Step 6: The grid size is bigger than the matrix size!");
-  check(
-    columns_per_block_step_4 * n == (1 << log2_data_block_size),
-    "Columns per block of step 4 is not a power of two!");
-
-  printf("Running. See out.txt for output.\n");
-
-  // Open text file
-  FILE *file = freopen("out.txt", "w", stdout);
-  if (file == NULL) {
-    perror("Error opening the output file!\n");
-    getchar();
-    exit(1);
-  };
-
-  // Prints the current time
-  time_t current_time;
-  time(&current_time);
-  printf("%s\n", ctime(&current_time));
-  fflush(file);
-
-  // Invoke kernels
-
-  time_t start_time = clock();
-
-  cudaDeviceSetLimit(cudaLimitPrintfFifoSize, 1024 * 1024 * 1024);
-
-  HungarianCPUContext ctx;
-
-  Hungarian_Algorithm(&ctx);
-  
-  time_t stop_time = clock();
-  fflush(file);
-
-  int total_cost = 0;
-  for (int r = 0; r < nrows; r++) {
-    int c = ctx.h_column_of_star_at_row[r];
-    if (c >= 0)
-      total_cost += ctx.h_cost[c][r];
-  }
-
-  printf("Total cost is \t %d \n", total_cost);
-  printf(
-    "Low resolution time is \t %f \n",
-    1000.0 * (double)(stop_time - start_time) / CLOCKS_PER_SEC);
-
-  fclose(file);
+  cudaFree(gpu_ctx);
 }
 
 // -----------------------------------------------------------
@@ -1171,35 +1072,35 @@ void hungarianLSAPE(
   const IT n = nrows - 1, m = ncols - 1;
 
   HungarianCPUContext ctx{};
-  for (int i=0; i<n; i++) {
-    for (int j=0; j<m; j++) {
-      ctx.h_cost[i][j] = C[j*nrows+i];
+  for (int i = 0; i < n; i++) {
+    for (int j = 0; j < m; j++) {
+      ctx.h_cost[i][j] = C[j * nrows + i];
     }
   }
-  for (int i=0; i<n; i++) {
-    for (int j=n; j<1024; j++)
-      if (j-n == i) {
-        ctx.h_cost[i][j] = C[n*nrows+i];
+  for (int i = 0; i < n; i++) {
+    for (int j = n; j < ::liblsap::n; j++)
+      if (j - n == i) {
+        ctx.h_cost[i][j] = C[n * nrows + i];
       } else {
         ctx.h_cost[i][j] = MAX_DATA;
       }
   }
-  for (int i=0; i<m; i++) {
-    for (int j=n; j<1024; j++)
-      if (j-n == i) {
-        ctx.h_cost[j][i] = C[i*nrows+m];
+  for (int i = 0; i < m; i++) {
+    for (int j = n; j < ::liblsap::n; j++)
+      if (j - n == i) {
+        ctx.h_cost[j][i] = C[i * nrows + m];
       } else {
         ctx.h_cost[j][i] = MAX_DATA;
       }
   }
   Hungarian_Algorithm(&ctx);
 
-  for (int i=0; i<n; i++) {
-    rho[i] = ctx.h_column_of_star_at_row[i];
+  for (int i = 0; i < n; i++) {
+    rho[i] = std::min(ctx.h_column_of_star_at_row[i], m);
   }
 
-  for (int i=0; i<m; i++) {
-    varrho[i] = ctx.h_row_of_star_at_column[i];
+  for (int i = 0; i < m; i++) {
+    varrho[i] = std::min(ctx.h_row_of_star_at_column[i], n);
   }
 }
 
