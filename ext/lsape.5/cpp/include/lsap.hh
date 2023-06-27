@@ -378,7 +378,7 @@ namespace liblsap {
 	      j = pred[i]; prim(0,i) = j;
 	      r = prim(1,j); prim(1,j) = i; i = r;
 	    }
-	    if (!isPrimalDual(prim)) std::cout << "not prim-dual !!!\n";
+	    // if (!isPrimalDual(prim)) std::cout << "not prim-dual !!!\n";
 	  }
 	delete[] U; delete[] pred; delete[] pi; delete[] SV;
       }

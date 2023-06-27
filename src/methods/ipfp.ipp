@@ -96,6 +96,7 @@ ls_run_from_initial_solution_(const GEDGraph & g, const GEDGraph & h, double low
 
 	// Main loop.
 	for (std::size_t current_itr{1}; not termination_criterion_met_(timer, alpha, min_linear_problem, current_itr, lower_bound, upper_bound); current_itr++) {
+		auto t_iter_start = std::chrono::high_resolution_clock::now();
 
 
 		// Compute the next gradient direction b and update the upper bound and the output node map.
@@ -141,6 +142,9 @@ ls_run_from_initial_solution_(const GEDGraph & g, const GEDGraph & h, double low
 			overall_cost_x -= (alpha * alpha) / (4 * beta);
 			linear_cost_x = compute_induced_linear_cost_(qap_instance_, x);
 		}
+		static int t_count = 0;
+		auto used = (std::chrono::high_resolution_clock::now() - t_iter_start).count();
+		fprintf(stderr, "iter %010ldns\t(%05d)\n", used, t_count++);
 	}
 
 

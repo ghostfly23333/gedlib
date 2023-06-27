@@ -24,7 +24,17 @@
 void run_on_dataset(const std::string & dataset) {
     ged::GEDEnv<ged::GXLNodeID, ged::GXLLabel, ged::GXLLabel> env;
     util::setup_environment(dataset, false, env);
-    env.set_method(ged::Options::GEDMethod::IPFP, "--threads 10 --initial-solutions 40 --ratio-runs-from-initial-solutions 0.25 --num-randpost-loops 3");
+    env.set_method(ged::Options::GEDMethod::IPFP,
+        "--threads 10 --initial-solutions 40 "
+        "--ratio-runs-from-initial-solutions 0.25 "
+        "--num-randpost-loops 3 "
+#if CUDA_LSAPE
+#else
+        // use LSAP solver
+        "--quadratic-model B-QAP "
+#endif
+        "--randomness PSEUDO "
+    );
     env.init_method();
     std::size_t num_runs{(env.graph_ids().second * env.graph_ids().second) - env.graph_ids().second};
     ged::ProgressBar progress_bar(num_runs);
@@ -67,10 +77,11 @@ void run_on_dataset(const std::string & dataset) {
 }
 
 int main(int argc, char* argv[]) {
-    std::vector<std::string> datasets{"Letter_HIGH", "pah", "alkane", "S-MOL_NL01", "S-MOL_NL04",
-                                      "S-MOL_NL07", "S-MOL_NL10", "S-mao_NL03", "S-mao_NL05", "S-mao_NL07",
-                                      "S-mao_NL09", "S-acyclic_NL03", "S-acyclic_NL05", "S-acyclic_NL07",
-                                      "S-acyclic_NL09", "AIDS"};
+    std::vector<std::string> datasets{"AIDS"};
+    // std::vector<std::string> datasets{"Letter_HIGH", "pah", "alkane", "S-MOL_NL01", "S-MOL_NL04",
+    //                                   "S-MOL_NL07", "S-MOL_NL10", "S-mao_NL03", "S-mao_NL05", "S-mao_NL07",
+    //                                   "S-mao_NL09", "S-acyclic_NL03", "S-acyclic_NL05", "S-acyclic_NL07",
+    //                                   "S-acyclic_NL09", "AIDS"};
     for (const std::string & dataset : datasets) {
         run_on_dataset(dataset);
     }

@@ -115,7 +115,7 @@ const int n_tests = 100;
 #else
 // User inputs: These values should be changed by the user
 const int user_n =
-  8; // This is the size of the cost matrix as supplied by the user
+  127; // This is the size of the cost matrix as supplied by the user
 const int n =
   1 << (klog2(user_n) + 1); // The size of the cost/pay matrix used in the
                             // algorithm that is increased to a power of two
@@ -462,14 +462,50 @@ __global__ void step_1_col_sub(HungarianGPUContext *ctx) {
     ctx->zeros_size_b[i] = 0;
 }
 
+__inline__ __device__
+float warpReduceSum(float val) {
+    for (int offset = 16; offset > 0; offset /= 2)
+        val += __shfl_down_sync(0xffffffff, val, offset);
+    return val;
+}
+
+__inline__ __device__
+float blockReduceSum(float val) {
+    static __shared__ int shared[32];
+    int lane = threadIdx.x % 32;
+    int wid = threadIdx.x / 32;
+    val = warpReduceSum(val);
+
+    //write reduced value to shared memory
+    if (lane == 0) shared[wid] = val;
+    __syncthreads();
+
+    //ensure we only grab a value from shared memory if that warp existed
+    val = (threadIdx.x<blockDim.x / 32) ? shared[lane] : int(0);
+    if (wid == 0) val = warpReduceSum(val);
+
+    return val;
+}
+
 // Compress matrix
 __global__ void compress_matrix(HungarianGPUContext *ctx) {
   int i = blockDim.x * blockIdx.x + threadIdx.x;
 
-  if (ctx->slack[i] == 0) {
+  int pred = ctx->slack[i] == 0;
+  int num_zeros = blockReduceSum(pred);
+  if (pred) {
     atomicAdd(&ctx->managed->zeros_size, 1);
+    // inter-block reduce
+    // if (threadIdx.x == 0) {
+    //   atomicAdd(&ctx->managed->zeros_size, num_zeros);
+    // }
     int b = i >> log2_data_block_size;
     int i0 = i & ~(data_block_size - 1); // == b << log2_data_block_size
+
+    // if (threadIdx.x == 0) {
+    //   int j = atomicAdd(ctx->zeros_size_b + b, num_zeros);
+    //   ctx->zeros[i0 + j] = i;
+    // }
     int j = atomicAdd(ctx->zeros_size_b + b, 1);
     ctx->zeros[i0 + j] = i;
   }
@@ -864,7 +900,7 @@ inline double get_timer_period(void) {
 
 #define declare_kernel(k)                                                      \
   hr_clock_rep k##_time = 0;                                                   \
-  int k##_runs = 0
+  static int k##_runs = 0
 
 #define call_kernel(k, n_blocks, n_threads, ctx)                               \
   call_kernel_s(k, n_blocks, n_threads, 0ll, ctx)
@@ -882,7 +918,7 @@ inline double get_timer_period(void) {
 // fflush(0);											\
 
 #define kernel_stats(k)                                                        \
-  printf(#k "\t %g \t %d\n", dh_get_timer_period() * k##_time, k##_runs)
+  fprintf(stderr, #k " %010ldns\t(%05d)\n", k##_time, k##_runs);
 
 // Hungarian_Algorithm
 void Hungarian_Algorithm(HungarianCPUContext *cpu_ctx, cudaStream_t stream) {
@@ -1044,8 +1080,26 @@ void Hungarian_Algorithm(HungarianCPUContext *cpu_ctx, cudaStream_t stream) {
     cpu_ctx->h_row_of_star_at_column, gpu_ctx->row_of_star_at_column,
     ncols * sizeof(int), cudaMemcpyKind::cudaMemcpyDeviceToHost, stream);
   checkCuda(cudaStreamSynchronize(stream));
+  kernel_stats(init);
+  kernel_stats(calc_min_in_rows);
+  kernel_stats(step_1_row_sub);
+  kernel_stats(calc_min_in_cols);
+  kernel_stats(step_1_col_sub);
+  kernel_stats(compress_matrix);
+  kernel_stats(step_2);
+  kernel_stats(step_3ini);
+  kernel_stats(step_3);
+  kernel_stats(step_4_init);
+  kernel_stats(step_4);
+  kernel_stats(min_reduce_kernel1);
+  kernel_stats(min_reduce_kernel2);
+  kernel_stats(step_6_add_sub);
+  kernel_stats(step_5a);
+  kernel_stats(step_5b);
+  kernel_stats(step_5c);
   // printf("ready to free!\n");
   cudaFree(gpu_ctx);
+  cudaFree(managed_ctx);
 }
 
 // -----------------------------------------------------------
@@ -1119,7 +1173,11 @@ void hungarianLSAPE(
   cudaStream_t stream;
   checkCuda(cudaStreamCreate(&stream));
 
+  static int t_count = 0;
+  auto t_iter_start = std::chrono::high_resolution_clock::now();
   Hungarian_Algorithm(&ctx, stream);
+  auto used = (std::chrono::high_resolution_clock::now() - t_iter_start).count();
+  fprintf(stderr, "used %010ldns\t(%05d)\n", used, t_count++);
 
   checkCuda(cudaStreamDestroy(stream));
 
