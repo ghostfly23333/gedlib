@@ -13,55 +13,38 @@
 
 namespace liblsap {
 
-// Fast Block Distributed CUDA Implementation of the Hungarian Algorithm
-//
-// Annex to the paper:
-// Paulo A. C. Lopes, Satyendra Singh Yadav, Aleksandar Ilic, Sarat Kumar Patra
-// , "Fast Block Distributed CUDA Implementation of the Hungarian Algorithm",
-// Journal Parallel Distributed Computing
-//
-// Hungarian algorithm:
-// (This algorithm was modified to result in an efficient GPU implementation,
-// see paper)
-//
-// Initialize the slack matrix with the cost matrix, and then work with the
-// slack matrix.
-//
-// STEP 1: Subtract the row minimum from each row. Subtract the column minimum
-// from each column.
-//
-// STEP 2: Find a zero of the slack matrix. If there are no starred zeros in its
-// column or row star the zero. Repeat for each zero.
-//
-// STEP 3: Cover each column with a starred zero. If all the columns are
-// covered then the matching is maximum.
-//
-// STEP 4: Find a non-covered zero and prime it. If there is no starred zero in
-// the row containing this primed zero, Go to Step 5. Otherwise, cover this row
-// and uncover the column containing the starred zero. Continue in this manner
-// until there are no uncovered zeros left. Save the smallest uncovered value
-// and Go to Step 6.
-//
-// STEP 5: Construct a series of alternating primed and starred zeros as
-// follows: Let Z0 represent the uncovered primed zero found in Step 4. Let Z1
-// denote the starred zero in the column of Z0(if any). Let Z2 denote the primed
-// zero in the row of Z1(there will always be one). Continue until the series
-// terminates at a primed zero that has no starred zero in its column. Un-star
-// each starred zero of the series, star each primed zero of the series, erase
-// all primes and uncover every row in the matrix. Return to Step 3.
-//
-// STEP 6: Add the minimum uncovered value to every element of each covered row,
-// and subtract it from every element of each uncovered column.
-// Return to Step 4 without altering any stars, primes, or covered rows.
-
-// Uncomment to use chars as the data type, otherwise use int
-// #define CHAR_DATA_TYPE
-
-// Uncomment to use a 4x4 predefined matrix for testing
-// #define USE_TEST_MATRIX
-
-// Comment to use managed variables instead of dynamic parallelism; usefull for
-// debugging #define DYNAMIC
+/* Hungarian algorithm:
+ * 
+ * Initialize the slack matrix with the cost matrix, and then work with the
+ * slack matrix.
+ * 
+ * STEP 1: Subtract the row minimum from each row. Subtract the column minimum
+ * from each column.
+ * 
+ * STEP 2: Find a zero of the slack matrix. If there are no starred zeros in its
+ * column or row star the zero. Repeat for each zero.
+ * 
+ * STEP 3: Cover each column with a starred zero. If all the columns are
+ * covered then the matching is maximum.
+ * 
+ * STEP 4: Find a non-covered zero and prime it. If there is no starred zero in
+ * the row containing this primed zero, Go to Step 5. Otherwise, cover this row
+ * and uncover the column containing the starred zero. Continue in this manner
+ * until there are no uncovered zeros left. Save the smallest uncovered value
+ * and Go to Step 6.
+ * 
+ * STEP 5: Construct a series of alternating primed and starred zeros as
+ * follows: Let Z0 represent the uncovered primed zero found in Step 4. Let Z1
+ * denote the starred zero in the column of Z0(if any). Let Z2 denote the primed
+ * zero in the row of Z1(there will always be one). Continue until the series
+ * terminates at a primed zero that has no starred zero in its column. Un-star
+ * each starred zero of the series, star each primed zero of the series, erase
+ * all primes and uncover every row in the matrix. Return to Step 3.
+ * 
+ * STEP 6: Add the minimum uncovered value to every element of each covered row,
+ * and subtract it from every element of each uncovered column.
+ * Return to Step 4 without altering any stars, primes, or covered rows.
+ */
 
 #define klog2(n)                                                               \
   ((n < 8)                                                                     \
@@ -105,99 +88,48 @@ namespace liblsap {
 #define kmin(x, y) ((x < y) ? x : y)
 #define kmax(x, y) ((x > y) ? x : y)
 
-#ifndef USE_TEST_MATRIX
-#ifdef _n_
-// These values are meant to be changed by scripts
-const int n = _n_;         // size of the cost/pay matrix
-const int range = _range_; // defines the range of the random matrix.
-const int user_n = n;
-const int n_tests = 100;
-#else
-// User inputs: These values should be changed by the user
-const int user_n =
-  127; // This is the size of the cost matrix as supplied by the user
-const int n =
-  1 << (klog2(user_n) + 1); // The size of the cost/pay matrix used in the
-                            // algorithm that is increased to a power of two
-const int range = n;        // defines the range of the random matrix.
-const int n_tests = 10;     // defines the number of tests performed
-#endif
+const int user_n = 127;
+const int n = 1 << (klog2(user_n) + 1);   // The size of the cost/pay matrix
+const int log2_n = klog2(n);              // log2(n)
+const int max_threads_per_block = 1024;   // The maximum number of threads per block
 
-// End of user inputs
+// Number of threads used in steps 3ini, 3, 4ini, 4a, 4b, 5a and 5b (64)
+const int n_threads = kmin(n, 64);
+// Number of threads used in step 1 and 6 (256)
+const int n_threads_reduction = kmin(n, 256);
+// Number of blocks used in step 1 and 6 (256)
+const int n_blocks_reduction = kmin(n, 256);
+// Number of threads used in steps 2 and 6 (512)
+const int n_threads_full = kmin(n, 512); 
+// Initialization for the random number generator
+const int seed = 45345; 
 
-const int log2_n = klog2(n); // log2(n)
-const int n_threads = kmin(
-  n,
-  64); // Number of threads used in small kernels grid size (typically grid size
-       // equal to n) Used in steps 3ini, 3, 4ini, 4a, 4b, 5a and 5b (64)
-const int n_threads_reduction = kmin(
-  n,
-  256); // Number of threads used in the redution kernels in step 1 and 6 (256)
-const int n_blocks_reduction = kmin(
-  n,
-  256); // Number of blocks used in the redution kernels in step 1 and 6 (256)
-const int n_threads_full =
-  kmin(n, 512); // Number of threads used the largest grids sizes (typically
-                // grid size equal to n*n) Used in steps 2 and 6 (512)
-const int seed = 45345; // Initialization for the random number generator
+// Number of blocks used in small kernels
+const int n_blocks = n / n_threads; 
+// Number of blocks used the largest grid sizes
+const int n_blocks_full = n * n / n_threads_full; 
+// Used to extract the row from tha matrix position index
+// Number of columns per block in step 4
+const int columns_per_block_step_4 = 512; 
+// Number of blocks in step 4 and 2
+const int n_blocks_step_4 = kmax(n / columns_per_block_step_4, 1);
+const int row_mask = (1 << log2_n) - 1; 
+const int nrows = n, ncols = n;
+// Number of rows per block in step 1
+const int n_rows_per_block = n / n_blocks_reduction;
 
-#else
-const int n = 4;
-const int log2_n = 2;
-const int n_threads = 2;
-const int n_threads_reduction = 2;
-const int n_blocks_reduction = 2;
-const int n_threads_full = 2;
-#endif
+// The size of a data block
+const int data_block_size = columns_per_block_step_4 * n;
+const int log2_data_block_size = log2_n + klog2(columns_per_block_step_4);
 
-const int n_blocks =
-  n / n_threads; // Number of blocks used in small kernels grid size (typically
-                 // grid size equal to n)
-const int n_blocks_full =
-  n * n / n_threads_full; // Number of blocks used the largest gris sizes
-                          // (typically grid size equal to n*n)
-const int row_mask =
-  (1 << log2_n) - 1; // Used to extract the row from tha matrix position index
-                     // (matrices are column wise)
-const int nrows = n, ncols = n; // The matrix is square so the number of rows
-                                // and columns is equal to n
-const int max_threads_per_block =
-  1024; // The maximum number of threads per block
-const int columns_per_block_step_4 =
-  512; // Number of columns per block in step 4
-const int n_blocks_step_4 =
-  kmax(n / columns_per_block_step_4, 1); // Number of blocks in step 4 and 2
-const int data_block_size =
-  columns_per_block_step_4 * n; // The size of a data block. Note that this can
-                                // be bigger than the matrix size.
-const int log2_data_block_size =
-  log2_n +
-  klog2(columns_per_block_step_4); // log2 of the size of a data block. Note
-                                   // that klog2 cannot handle very large sizes
-
-// For the selection of the data type used
-#ifndef CHAR_DATA_TYPE
 typedef int data;
 #define MAX_DATA INT_MAX
 #define MIN_DATA INT_MIN
-#else
-typedef unsigned char data;
-#define MAX_DATA 255
-#define MIN_DATA 0
-#endif
 
 // Host Variables
 
-// Some host variables start with h_ to distinguish them from the corresponding
-// device variables Device variables have no prefix.
-
 struct HungarianCPUContext {
-#ifndef USE_TEST_MATRIX
   data h_cost[ncols][nrows];
-#else
-  data h_cost[n][n] = {
-    {1, 2, 3, 4}, {2, 4, 6, 8}, {3, 6, 9, 12}, {4, 8, 12, 16}};
-#endif
   int h_column_of_star_at_row[nrows];
   int h_row_of_star_at_column[ncols];
   int h_zeros_vector_size;
@@ -286,8 +218,6 @@ inline __device__ cudaError_t d_checkCuda(cudaError_t result) {
 
 __global__ void init(HungarianGPUContext *ctx) {
   int i = blockDim.x * blockIdx.x + threadIdx.x;
-  // initializations
-  // for step 2
   if (i < nrows) {
     ctx->cover_row[i] = 0;
     ctx->column_of_star_at_row[i] = -1;
@@ -298,9 +228,9 @@ __global__ void init(HungarianGPUContext *ctx) {
   }
 }
 
-// STEP 1.
-// a) Subtracting the row by the minimum in each row
-const int n_rows_per_block = n / n_blocks_reduction;
+/* STEP 1: Subtract the row minimum from each row. Subtract the column minimum
+ * from each column.
+ */
 
 __device__ void min_in_rows_warp_reduce(volatile data *sdata, int tid) {
   if (n_threads_reduction >= 64 && n_rows_per_block < 64)
@@ -511,12 +441,12 @@ __global__ void compress_matrix(HungarianGPUContext *ctx) {
   }
 }
 
-// STEP 2
-// Find a zero of slack. If there are no starred zeros in its
-// column or row star the zero. Repeat for each zero.
-
-// The zeros are split through blocks of data so we run step 2 with several
-// thread blocks and rerun the kernel if repeat was set to true.
+/* STEP 2
+ * Find a zero of slack. If there are no starred zeros in its
+ * column or row star the zero. Repeat for each zero.
+ * The zeros are split through blocks of data so we run step 2 with several
+ * thread blocks and rerun the kernel if repeat was set to true.
+ */
 __global__ void step_2(HungarianGPUContext *ctx) {
   int i = threadIdx.x;
   int b = blockIdx.x;
@@ -538,11 +468,8 @@ __global__ void step_2(HungarianGPUContext *ctx) {
       int c = z >> log2_n;
 
       if (ctx->cover_row[l] == 0 && ctx->cover_column[c] == 0) {
-        // thread trys to get the line
         if (!atomicExch((int *)&(ctx->cover_row[l]), 1)) {
-          // only one thread gets the line
           if (!atomicExch((int *)&(ctx->cover_column[c]), 1)) {
-            // only one thread gets the column
             ctx->row_of_star_at_column[c] = l;
             ctx->column_of_star_at_row[l] = c;
           } else {
@@ -580,13 +507,14 @@ __global__ void step_3(HungarianGPUContext *ctx) {
   }
 }
 
-// STEP 4
-// Find a noncovered zero and prime it. If there is no starred
-// zero in the row containing this primed zero, go to Step 5.
-// Otherwise, cover this row and uncover the column containing
-// the starred zero. Continue in this manner until there are no
-// uncovered zeros left. Save the smallest uncovered value and
-// Go to Step 6.
+/* STEP 4
+ * Find a noncovered zero and prime it. If there is no starred
+ * zero in the row containing this primed zero, go to Step 5.
+ * Otherwise, cover this row and uncover the column containing
+ * the starred zero. Continue in this manner until there are no
+ * uncovered zeros left. Save the smallest uncovered value and
+ * Go to Step 6.
+ */
 
 __global__ void step_4_init(HungarianGPUContext *ctx) {
   int i = blockDim.x * blockIdx.x + threadIdx.x;
@@ -603,7 +531,6 @@ __global__ void step_4(HungarianGPUContext *ctx) {
 
   int i = threadIdx.x;
   int b = blockIdx.x;
-  // int limit; my__syncthreads_init(limit);
 
   if (i == 0) {
     s_repeat_kernel = false;
@@ -637,9 +564,9 @@ __global__ void step_4(HungarianGPUContext *ctx) {
             s_goto_5 = true;
           }
         }
-      } // for(int n
+      }
 
-    } // for(int j
+    }
     __syncthreads();
   } while (s_found && !s_goto_5);
 
@@ -650,15 +577,16 @@ __global__ void step_4(HungarianGPUContext *ctx) {
 }
 
 /* STEP 5:
-Construct a series of alternating primed and starred zeros as
-follows:
-Let Z0 represent the uncovered primed zero found in Step 4.
-Let Z1 denote the starred zero in the column of Z0(if any).
-Let Z2 denote the primed zero in the row of Z1(there will always
-be one). Continue until the series terminates at a primed zero
-that has no starred zero in its column. Unstar each starred
-zero of the series, star each primed zero of the series, erase
-all primes and uncover every line in the matrix. Return to Step 3.*/
+ * Construct a series of alternating primed and starred zeros as
+ * follows:
+ * Let Z0 represent the uncovered primed zero found in Step 4.
+ * Let Z1 denote the starred zero in the column of Z0(if any).
+ * Let Z2 denote the primed zero in the row of Z1(there will always
+ * be one). Continue until the series terminates at a primed zero
+ * that has no starred zero in its column. Unstar each starred
+ * zero of the series, star each primed zero of the series, erase
+ * all primes and uncover every line in the matrix. Return to Step 3.
+ */
 
 // Eliminates joining paths
 __global__ void step_5a(HungarianGPUContext *ctx) {
@@ -704,10 +632,11 @@ __global__ void step_5b(HungarianGPUContext *ctx) {
   }
 }
 
-// STEP 6
-// Add the minimum uncovered value to every element of each covered
-// row, and subtract it from every element of each uncovered column.
-// Return to Step 4 without altering any stars, primes, or covered lines.
+/* STEP 6
+ * Add the minimum uncovered value to every element of each covered
+ * row, and subtract it from every element of each uncovered column.
+ * Return to Step 4 without altering any stars, primes, or covered lines.
+ */
 
 template <unsigned int blockSize>
 __device__ void min_warp_reduce(volatile data *sdata, int tid) {
@@ -827,12 +756,6 @@ __device__ void min_reduce2(
 }
 
 __global__ void step_6_add_sub(HungarianGPUContext *ctx) {
-  // STEP 6:
-  //	/*STEP 6: Add the minimum uncovered value to every element of each
-  // covered 	row, and subtract it from every element of each uncovered
-  // column. 	Return to Step 4 without altering any stars, primes, or covered
-  // lines.
-  //*/
   int i = blockDim.x * blockIdx.x + threadIdx.x;
   int l = i & row_mask;
   int c = i >> log2_n;
@@ -873,7 +796,6 @@ __device__ inline double d_get_timer_period(void) { return 1.0e-6; }
 // -------------------------------------------------------------------------------------
 
 // Convenience function for checking CUDA runtime API results
-// can be wrapped around any runtime API call. No-op in release builds.
 inline cudaError_t checkCuda(cudaError_t result) {
 #if defined(DEBUG) || defined(_DEBUG)
   if (result != cudaSuccess) {
